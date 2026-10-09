@@ -66,13 +66,13 @@
 **Description:** Install Prisma, point it at `DATABASE_URL` and wrap the client in a `PrismaService` inside a `PrismaModule`. No tables yet; the schema holds only the datasource and generator.
 
 **Acceptance criteria:**
-- [ ] `npx prisma validate` passes
-- [ ] `PrismaService` connects on module init and disconnects on shutdown
-- [ ] `PrismaModule` exports the service so stage 2 can inject it anywhere
+- [x] `npx prisma validate` passes
+- [x] `PrismaService` connects on module init and disconnects on shutdown
+- [x] `PrismaModule` exports the service so stage 2 can inject it anywhere
 
 **Verification:**
-- [ ] Build succeeds: `npm run build`
-- [ ] Manual check: app starts with the database running and logs no Prisma errors
+- [x] Build succeeds: `npm run build`
+- [x] Manual check: app starts with the database running and logs no Prisma errors
 
 **Dependencies:** Tasks 2, 3
 
@@ -85,13 +85,13 @@
 **Description:** Add `GET /health`, which runs `SELECT 1` through Prisma. It returns 200 with `{ "status": "ok" }` when the database answers and 503 when it does not.
 
 **Acceptance criteria:**
-- [ ] 200 `{ "status": "ok" }` with the database up
-- [ ] 503 with the database down, and the app keeps running
-- [ ] No secrets or connection strings appear in the response
+- [x] 200 `{ "status": "ok" }` with the database up
+- [x] 503 with the database down, and the app keeps running
+- [x] No secrets or connection strings appear in the response
 
 **Verification:**
-- [ ] Tests pass: e2e test for the 200 case; unit test with a mocked Prisma failure for the 503 case
-- [ ] Manual check: `docker compose stop postgres`, call `/health`, get 503; start it again, get 200
+- [x] Tests pass: e2e test for the 200 case; unit test with a mocked Prisma failure for the 503 case
+- [x] Manual check: `docker compose stop postgres`, call `/health`, get 503; start it again, get 200
 
 **Dependencies:** Task 4
 
@@ -104,13 +104,13 @@
 **Description:** Write the docs needed to run stage 1 and to explain it in an interview.
 
 **Acceptance criteria:**
-- [ ] `README.md` explains how to run stage 1: copy `.env.example`, `docker compose up -d`, `npm run start:dev`, call `/health`
-- [ ] `docs/BUILD_LOG.md` records what stage 1 built and any problems hit
-- [ ] `docs/TECH_STACK.md` explains why NestJS, Prisma, PostgreSQL, Redis and Docker Compose are used
-- [ ] `docs/INTERVIEW_PREP.md` has questions and answers on config validation, `PrismaService` lifecycle and the health check
+- [x] `README.md` explains how to run stage 1: copy `.env.example`, `docker compose up -d`, `npm run start:dev`, call `/health`
+- [x] `docs/BUILD_LOG.md` records what stage 1 built and any problems hit
+- [x] `docs/TECH_STACK.md` explains why NestJS, Prisma, PostgreSQL, Redis and Docker Compose are used
+- [x] `docs/INTERVIEW_PREP.md` has questions and answers on config validation, `PrismaService` lifecycle and the health check
 
 **Verification:**
-- [ ] Manual check: follow the README from a fresh clone and reach a 200 on `/health`
+- [x] Manual check: follow the README from a fresh clone and reach a 200 on `/health`
 
 **Dependencies:** Task 5
 
@@ -119,6 +119,6 @@
 **Estimated scope:** Small (docs only)
 
 ## Checkpoint: Stage 1 complete
-- [ ] `npm test`, `npm run test:e2e` and `npm run build` all pass
-- [ ] Stage 1 "Done when" from `PROJECT.md` met: `docker compose up` runs and `/health` returns ok
-- [ ] Commit, then human review before stage 2
+- [x] `npm test`, `npm run test:e2e` and `npm run build` all pass
+- [x] Stage 1 "Done when" from `PROJECT.md` met: `docker compose up` runs and `/health` returns ok
+- [x] Commit, then human review before stage 2

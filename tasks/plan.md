@@ -31,13 +31,13 @@ Tasks are tracked in `tasks/todo.md`.
 - [x] Containers report healthy
 
 ### Phase 2: Database and health
-- [ ] Task 4: Prisma setup and `PrismaService`
-- [ ] Task 5: Health endpoint
-- [ ] Task 6: Docs and stage 1 commit
+- [x] Task 4: Prisma setup and `PrismaService`
+- [x] Task 5: Health endpoint
+- [x] Task 6: Docs and stage 1 commit
 
 ### Checkpoint: Stage 1 complete
-- [ ] `docker compose up -d`, then `npm run start:dev`, then `GET /health` returns 200 `{ "status": "ok" }`
-- [ ] All tests pass and `npm run build` succeeds
+- [x] `docker compose up -d`, then `npm run start:dev`, then `GET /health` returns 200 `{ "status": "ok" }`
+- [x] All tests pass and `npm run build` succeeds
 - [ ] Human review before stage 2
 
 ## Risks and Mitigations
