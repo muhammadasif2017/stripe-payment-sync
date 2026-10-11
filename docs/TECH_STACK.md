@@ -37,3 +37,15 @@ The test runner that NestJS 12 sets up by default. It uses the same `describe`/`
 ## oxlint and Prettier
 
 oxlint finds likely bugs and bad patterns. Prettier formats code the same way every time. Both came with the NestJS scaffold.
+
+## Prisma Migrate
+
+Every schema change becomes a timestamped SQL file in `prisma/migrations/`, committed with the code. `migrate dev` creates and applies one on a development machine. `migrate deploy` only applies files that already exist, which is what tests, CI and servers run. The database history is then part of the Git history and can be reviewed like code.
+
+## PostgreSQL enums and constraints
+
+Statuses (event, order, payment, refund) are PostgreSQL enum types, so the database refuses an invalid status instead of trusting every piece of code that writes one. Unique indexes on Stripe IDs and `ON DELETE RESTRICT` foreign keys work the same way: the rules live in the database, where no code path can skip them.
+
+## Separate test database
+
+The e2e tests write to `payments_test` in the same PostgreSQL container, never to the development database. A Vitest global setup creates it and runs `prisma migrate deploy` before the tests, so it always has the current schema.

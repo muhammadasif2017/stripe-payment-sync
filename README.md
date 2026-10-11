@@ -4,7 +4,18 @@
 
 A NestJS backend that receives Stripe payment events, processes them through a Redis job queue with retries, and keeps a PostgreSQL database in sync. The full scope and build plan are in [`PROJECT.md`](PROJECT.md).
 
-**Status:** stage 1 of 8 (project setup). The app starts, validates its configuration and reports database health. Stripe webhooks, the queue and reconciliation arrive in later stages.
+**Status:** stage 2 of 8 (data model). The app starts, validates its configuration, reports database health, and has tables for Stripe events, orders, payments and refunds. Stripe webhooks, the queue and reconciliation arrive in later stages.
+
+## Data model
+
+| Table | Holds | Key point |
+|---|---|---|
+| `stripe_events` | Every webhook event Stripe sends, as received | The Stripe event ID is the primary key, so a duplicate delivery is rejected by the database |
+| `orders` | A customer's purchase | Amount in cents; `PENDING` until paid |
+| `payments` | Each payment attempt for an order | Unique Stripe payment intent ID |
+| `refunds` | Full or partial refunds of a payment | Unique Stripe refund ID |
+
+Orders link to payments and payments to refunds. A payment or refund cannot be orphaned: deleting an order that has payments is refused. The schema is in [`prisma/schema.prisma`](prisma/schema.prisma), with a comment on each decision.
 
 ## Requirements
 
