@@ -44,7 +44,7 @@ Every schema change becomes a timestamped SQL file in `prisma/migrations/`, comm
 
 ## PostgreSQL enums and constraints
 
-Statuses (event, order, payment, refund) are PostgreSQL enum types, so the database refuses an invalid status instead of trusting every piece of code that writes one. Unique indexes on Stripe IDs and `ON DELETE RESTRICT` foreign keys work the same way: the rules live in the database, where no code path can skip them.
+Statuses (event, order, payment, refund) are PostgreSQL enum types, so the database refuses an invalid status instead of trusting every piece of code that writes one. Unique indexes on Stripe IDs, `ON DELETE RESTRICT` foreign keys and `CHECK (amount > 0)` constraints work the same way: the rules live in the database, where no code path can skip them. Prisma cannot describe CHECK constraints in its schema, so they are written by hand in the `positive_amount_checks` migration.
 
 ## Separate test database
 

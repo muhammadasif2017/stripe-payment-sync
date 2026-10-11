@@ -90,6 +90,64 @@ describe('orders, payments and refunds tables (e2e)', () => {
     expect((error as Prisma.PrismaClientKnownRequestError).code).toBe('P2002');
   });
 
+  it('stores an expired order and a canceled payment', async () => {
+    const order = await createPaidOrder();
+
+    await prisma.order.update({ where: { id: order.id }, data: { status: 'EXPIRED' } });
+    await prisma.payment.update({
+      where: { id: order.payments[0].id },
+      data: { status: 'CANCELED' },
+    });
+
+    const saved = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+      include: { payments: true },
+    });
+    expect(saved.status).toBe('EXPIRED');
+    expect(saved.payments[0].status).toBe('CANCELED');
+  });
+
+  it.each([0, -100])('rejects an amount of %i on orders, payments and refunds', async (amount) => {
+    const order = await createPaidOrder();
+    const paymentId = order.payments[0].id;
+
+    const orderAttempt = await prisma.order
+      .create({ data: { amount, currency: 'usd' } })
+      .catch((e: unknown) => e);
+    // If the row slipped through, record it for cleanup before the assertion fails the test.
+    // (Payments and refunds below belong to `order`, which is already cleaned up.)
+    if (!(orderAttempt instanceof Error)) orderIds.push((orderAttempt as { id: string }).id);
+    expect(orderAttempt).toBeInstanceOf(Error);
+    expect((orderAttempt as Error).message).toMatch(/orders_amount_positive/);
+
+    const childAttempts = [
+      prisma.payment.create({
+        data: {
+          orderId: order.id,
+          stripePaymentIntentId: `pi_test_${run}_amount_${amount}`,
+          amount,
+          currency: 'usd',
+          status: 'SUCCEEDED',
+        },
+      }),
+      prisma.refund.create({
+        data: {
+          paymentId,
+          stripeRefundId: `re_test_${run}_amount_${amount}`,
+          amount,
+          currency: 'usd',
+          status: 'SUCCEEDED',
+        },
+      }),
+    ];
+
+    const [paymentResult, refundResult] = await Promise.all(
+      childAttempts.map((attempt) => attempt.catch((e: unknown) => e)),
+    );
+    expect((paymentResult as Error).message).toMatch(/payments_amount_positive/);
+    expect((refundResult as Error).message).toMatch(/refunds_amount_positive/);
+  });
+
   it('refuses to delete an order that has payments, and keeps the order', async () => {
     const order = await createPaidOrder();
 

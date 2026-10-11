@@ -46,6 +46,8 @@ enum OrderStatus {
   PAYMENT_FAILED
   PARTIALLY_REFUNDED
   REFUNDED
+  /// Checkout session expired before payment (checkout.session.expired).
+  EXPIRED
 
   @@map("order_status")
 }
@@ -53,6 +55,8 @@ enum OrderStatus {
 enum PaymentStatus {
   SUCCEEDED
   FAILED
+  /// Payment intent canceled before it succeeded (payment_intent.canceled).
+  CANCELED
 
   @@map("payment_status")
 }

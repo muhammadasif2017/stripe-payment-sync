@@ -70,7 +70,19 @@ A customer's first card can be declined and a second one succeed. Keeping both a
 PostgreSQL indexes primary keys and unique columns automatically, but not foreign keys. Without the index, "all payments of this order" scans the whole payments table.
 
 **Why a separate test database?**
-The tests insert and delete rows. Run against the development database, a cleanup step could wipe data you were using. A guard refuses to start the tests if both URLs point at the same database.
+The tests insert and delete rows. Run against the development database, a cleanup step could wipe data you were using. A guard refuses to start the tests if both URLs reach the same database (same host, port and name), or if the test database is on another machine without `ALLOW_REMOTE_TEST_DATABASE=true`, so a typo cannot aim the tests at a shared server.
 
 **How do you know the constraint tests actually test the constraint?**
 They were broken on purpose in the test database: dropping the primary key made the duplicate-event test fail, and switching the foreign key to `CASCADE` made the delete test fail. A test that still passes when the thing it checks is removed proves nothing.
+**Why add CHECK constraints when the app validates amounts anyway?**
+The app is not the only thing that writes rows: a bug in one handler, a script or a manual fix in `psql` can all skip the app's checks. `CHECK (amount > 0)` on orders, payments and refunds makes PostgreSQL refuse a zero or negative amount from any source. Prisma can't describe CHECK constraints in its schema, so they are in a hand-written migration, and Prisma ignores them when it compares the schema with the database.
+
+**Why not also stop refunds from adding up to more than the payment in the database?**
+That rule spans several rows, and a CHECK constraint can only see one row. It needs a trigger, which is harder to test and to change. The worker will check it before it saves a refund (stage 5), and reconciliation compares totals with Stripe.
+
+**Which order and payment states are covered?**
+Orders: `PENDING`, `PAID`, `PAYMENT_FAILED`, `PARTIALLY_REFUNDED`, `REFUNDED`, and `EXPIRED` for a checkout session that ran out (`checkout.session.expired`). Payments: `SUCCEEDED`, `FAILED`, and `CANCELED` (`payment_intent.canceled`). Delayed payment methods such as bank debits, which sit in a "processing" state for days, are not covered because the project is card-only. Supporting them means adding a `PROCESSING` payment status.
+
+**What are the known limits of this data model?**
+- **Amount size:** amounts are 32-bit integers, so the largest is 2,147,483,647 cents (about $21 million) per row. Stripe allows larger amounts in some currencies, such as IDR. The fix is `BigInt`, at the cost of a JavaScript `bigint` type that can't go into JSON directly. Not needed for course sales in one currency.
+- **Currency consistency:** each table stores its own currency, and nothing makes a payment's currency match its order's. With one currency this can't go wrong in practice. Supporting several would need the worker to check it, or the currency to come from the parent row.
