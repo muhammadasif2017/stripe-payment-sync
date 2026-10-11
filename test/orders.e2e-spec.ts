@@ -1,11 +1,8 @@
-import { PrismaPg } from '@prisma/adapter-pg';
-import { Prisma, PrismaClient } from '../src/generated/prisma/client.js';
+import { Prisma } from '../src/generated/prisma/client.js';
+import { createTestPrisma } from './test-prisma.js';
 
-// Runs against the test database (DATABASE_URL is pointed at payments_test by vitest.config.e2e.ts).
 describe('orders, payments and refunds tables (e2e)', () => {
-  const prisma = new PrismaClient({
-    adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
-  });
+  const prisma = createTestPrisma();
   // Unique per run, so leftovers from an interrupted run cannot collide with this one.
   const run = Date.now();
   const paymentIntentId = `pi_test_${run}`;

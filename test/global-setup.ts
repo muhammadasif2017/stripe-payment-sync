@@ -1,6 +1,8 @@
 // Runs once before the e2e tests: makes sure the test database exists and has every migration.
 import 'dotenv/config';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import pg from 'pg';
 import { databaseName, resolveTestDatabaseUrl } from './test-database.js';
 
@@ -29,7 +31,12 @@ export default async function setup(): Promise<void> {
     await admin.end();
   }
 
-  execSync('npx prisma migrate deploy', {
+  // Run the locally installed Prisma CLI with the current Node binary: no npx lookup, no shell.
+  const prismaCli = path.join(
+    path.dirname(createRequire(import.meta.url).resolve('prisma/package.json')),
+    'build/index.js',
+  );
+  execFileSync(process.execPath, [prismaCli, 'migrate', 'deploy'], {
     env: { ...process.env, DATABASE_URL: testUrl },
     stdio: 'inherit',
   });
