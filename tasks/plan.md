@@ -68,7 +68,7 @@ Tasks are tracked in `tasks/todo.md`.
 - [x] Duplicate-event test passes and fails when the primary key is removed
 
 ### Phase 2: Orders, payments and refunds
-- [ ] Task 3: `Order`, `Payment` and `Refund` models, second migration and relationship tests
+- [x] Task 3: `Order`, `Payment` and `Refund` models, second migration and relationship tests
 - [ ] Task 4: Docs and pull request
 
 ### Checkpoint: Stage 2 complete

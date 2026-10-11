@@ -48,16 +48,16 @@
 **Description:** Add `orders`, `payments` and `refunds`, linked order → payments → refunds. Each Stripe object ID is unique. Money is stored as integer cents.
 
 **Acceptance criteria:**
-- [ ] `Order`: UUID `id`, `status` enum (`PENDING`, `PAID`, `PAYMENT_FAILED`, `PARTIALLY_REFUNDED`, `REFUNDED`), `amount` (int), `currency`, `customerEmail` (optional), `stripeCheckoutSessionId` (optional, unique), timestamps
-- [ ] `Payment`: UUID `id`, `orderId` foreign key, `stripePaymentIntentId` (unique), `amount`, `currency`, `status` enum (`SUCCEEDED`, `FAILED`), timestamps
-- [ ] `Refund`: UUID `id`, `paymentId` foreign key, `stripeRefundId` (unique), `amount`, `currency`, `status` enum (`PENDING`, `SUCCEEDED`, `FAILED`, `CANCELED`), timestamps
-- [ ] Foreign keys use `onDelete: Restrict`; tables and columns are snake_case in PostgreSQL
-- [ ] Tests: create an order → payment → refund chain and read it back with relations; a duplicate `stripePaymentIntentId` fails with `P2002`; deleting an order that has a payment fails
+- [x] `Order`: UUID `id`, `status` enum (`PENDING`, `PAID`, `PAYMENT_FAILED`, `PARTIALLY_REFUNDED`, `REFUNDED`), `amount` (int), `currency`, `customerEmail` (optional), `stripeCheckoutSessionId` (optional, unique), timestamps
+- [x] `Payment`: UUID `id`, `orderId` foreign key, `stripePaymentIntentId` (unique), `amount`, `currency`, `status` enum (`SUCCEEDED`, `FAILED`), timestamps
+- [x] `Refund`: UUID `id`, `paymentId` foreign key, `stripeRefundId` (unique), `amount`, `currency`, `status` enum (`PENDING`, `SUCCEEDED`, `FAILED`, `CANCELED`), timestamps
+- [x] Foreign keys use `onDelete: Restrict`; tables and columns are snake_case in PostgreSQL
+- [x] Tests: create an order → payment → refund chain and read it back with relations; a duplicate `stripePaymentIntentId` fails with `P2002`; deleting an order that has a payment fails
 
 **Verification:**
-- [ ] Tests pass: `npm test` and `npm run test:e2e`
-- [ ] Build succeeds: `npm run build`
-- [ ] Manual check: `npx prisma migrate reset` on the dev database replays both migrations cleanly
+- [x] Tests pass: `npm test` and `npm run test:e2e`
+- [x] Build succeeds: `npm run build`
+- [x] Manual check: both migrations replay cleanly on a fresh database (`payments_replay`; Prisma blocks `migrate reset` for AI agents without user consent)
 
 **Dependencies:** Task 2
 
