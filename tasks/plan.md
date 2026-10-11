@@ -49,6 +49,7 @@ Tasks are tracked in `tasks/todo.md`.
 | Docker Desktop not running | Low | Compose fails fast with a clear error; start Docker Desktop first |
 | Prisma setup changed between major versions | Medium | Follow the official Prisma + NestJS guide for the installed version, not memory |
 | Windows CRLF line endings break shell scripts in containers | Low | Add `.gitattributes` with `* text=auto eol=lf` in Task 1 |
+| `postinstall` runs `prisma generate`, but `prisma` and `dotenv` are dev dependencies (PR #1 review) | Low now, high at stage 8 | `npm ci --omit=dev` in a production image would fail. When writing the Dockerfile, run `prisma generate` in the build stage and skip postinstall in the runtime stage, or move both packages to dependencies |
 
 ## Open Questions
 

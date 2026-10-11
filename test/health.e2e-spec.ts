@@ -18,7 +18,8 @@ describe('GET /health (e2e)', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    // Optional chaining: if startup failed in beforeAll, `app` is unset and the real error should show.
+    await app?.close();
   });
 
   it('returns 200 and status ok when the database is up', () => {

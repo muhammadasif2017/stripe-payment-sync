@@ -23,8 +23,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Append-only file + named volume: queued and failed BullMQ jobs (stage 4) survive a container
+    # restart or recreate. Without them a `docker compose down` would silently drop pending payments.
+    command: ['redis-server', '--appendonly', 'yes']
     ports:
       - '127.0.0.1:${REDIS_PORT:-6380}:6379'
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
@@ -33,3 +38,4 @@ services:
 
 volumes:
   postgres-data:
+  redis-data:

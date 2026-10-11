@@ -1,7 +1,11 @@
 import { Controller, Get, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 
-/** Liveness check for Docker, uptime monitors and the README's "is it running?" step. */
+/**
+ * Readiness check: "can this instance serve requests right now?", including its database.
+ * Use it for load balancers, uptime monitors and the README's "is it running?" step.
+ * Do not use it as a container liveness probe: a short database outage would restart healthy containers.
+ */
 @Controller('health')
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);
@@ -20,9 +24,14 @@ export class HealthController {
       await this.prisma.$queryRaw`SELECT 1`;
       return { status: 'ok' };
     } catch (error) {
-      // Prisma's message is often empty here; its error code (e.g. P1001 = can't reach server) names the cause.
-      const { name, code } = error as { name?: string; code?: string };
-      this.logger.error(`Database health check failed: ${name ?? 'Error'} ${code ?? ''}`.trim());
+      // Normalise first: a rejection is not guaranteed to be an Error (it could be undefined).
+      const err = error instanceof Error ? error : new Error(String(error));
+      // Prisma's message is often empty here; its code (e.g. ECONNREFUSED, P1001) names the cause.
+      const code = (err as { code?: unknown }).code;
+      this.logger.error(
+        `Database health check failed: ${err.name}${typeof code === 'string' ? ` ${code}` : ''}`,
+        err.stack,
+      );
       throw new ServiceUnavailableException({ status: 'error' });
     }
   }

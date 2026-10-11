@@ -20,7 +20,7 @@ The ORM: it turns a schema file into database migrations and a typed client. A t
 
 ## Redis 7
 
-An in-memory data store. BullMQ keeps its job queue in Redis from stage 4, so jobs survive an API restart.
+An in-memory data store. BullMQ keeps its job queue in Redis from stage 4, so jobs survive an API restart. Redis runs with append-only persistence (`--appendonly yes`) on a named Docker volume, so queued and failed jobs also survive a Redis restart or a recreated container.
 
 ## Docker Compose
 

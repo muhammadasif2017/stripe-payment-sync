@@ -21,6 +21,12 @@ describe('HealthController', () => {
     await expect(controller.check()).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
+  it('still returns 503 when the rejection is not an Error', async () => {
+    const controller = controllerWith(() => Promise.reject(undefined));
+
+    await expect(controller.check()).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
   it('does not leak the database error in the 503 response', async () => {
     const controller = controllerWith(() =>
       Promise.reject(new Error('connect ECONNREFUSED postgresql://payments:secret@localhost:5435')),

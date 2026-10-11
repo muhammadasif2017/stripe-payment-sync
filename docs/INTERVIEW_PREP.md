@@ -23,7 +23,19 @@ NestJS lifecycle hooks. `onModuleInit` opens the connection pool when the app st
 In Prisma 7, the client talks to the database through a normal Node.js driver (here `pg`, via `@prisma/adapter-pg`) instead of a bundled engine binary. It is fewer moving parts, and it uses the same driver the rest of the Node ecosystem uses.
 
 **Why does `/health` query the database instead of just returning ok?**
-A health check that only proves the HTTP server is up can say "healthy" while every real request fails. Running `SELECT 1` proves the app can reach PostgreSQL. It returns 503 when it can't, so Docker or an uptime monitor can tell something is wrong.
+A health check that only proves the HTTP server is up can say "healthy" while every real request fails. Running `SELECT 1` proves the app can reach PostgreSQL. It returns 503 when it can't, so a load balancer or an uptime monitor can tell something is wrong.
+
+**Is `/health` a liveness check or a readiness check?**
+Readiness. A liveness check asks "is this process stuck, should it be restarted?" and must not depend on the database. A readiness check asks "can this instance serve requests right now?" and should. If `/health` were used as a liveness probe, a one-minute database outage would make Docker or Kubernetes restart every healthy API container in a loop. A separate database-free liveness route comes with the API container in a later stage.
+
+**What happens if the database silently stops answering?**
+By default node-postgres waits forever for a connection, so requests would hang instead of failing. `PrismaService` sets `connectionTimeoutMillis: 5000`: after 5 seconds the query fails and `/health` returns 503. A refused connection (database stopped) already fails straight away; the timeout covers the slower case, like a network drop.
+
+**What happens if the app starts while the database is down?**
+It starts anyway, and `/health` returns 503 until the database is back, then 200 without a restart. Prisma 7's driver adapter opens connections when they are first needed, so `$connect()` at startup does not fail. Tested by hand in stage 1.
+
+**How do you know a test can actually fail?**
+Break the code on purpose and check the test goes red. The review found a test that wrapped `expect.unreachable()` inside its own `try`, so the `catch` swallowed the failure and the test could never fail. After the fix, removing the message that hides the secret makes the test fail, as it should.
 
 **Why doesn't the 503 response include the error details?**
 The error can contain hostnames, ports or other internal details. Those go to the server log for the developer. The public response just says `{"status":"error"}`.

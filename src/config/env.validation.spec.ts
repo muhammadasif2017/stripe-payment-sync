@@ -51,11 +51,10 @@ describe('validateEnv', () => {
   });
 
   it('does not put secret values in the error message', () => {
-    try {
-      validateEnv({ ...validEnv, STRIPE_SECRET_KEY: 'sk_live_supersecret' });
-      expect.unreachable();
-    } catch (error) {
-      expect((error as Error).message).not.toContain('supersecret');
-    }
+    const run = () => validateEnv({ ...validEnv, STRIPE_SECRET_KEY: 'sk_live_supersecret' });
+
+    // Assert the throw first: a try/catch with expect.unreachable() inside would swallow its own failure.
+    expect(run).toThrow('STRIPE_SECRET_KEY');
+    expect(run).not.toThrow('supersecret');
   });
 });
