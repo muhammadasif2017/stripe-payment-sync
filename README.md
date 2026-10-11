@@ -56,6 +56,7 @@ A NestJS backend that receives Stripe payment events, processes them through a R
 npm test           # unit tests
 npm run test:e2e   # end-to-end tests; needs `docker compose up -d` and a filled-in .env
 npm run lint
+npm run typecheck  # type-checks src/ and test/; Vitest and the build skip test files
 ```
 
 The end-to-end tests use their own database, `payments_test`, set by `TEST_DATABASE_URL` in `.env`. Before the tests run, they create it if it is missing and apply every migration, so your development data in `payments` is never touched. They refuse to run if both URLs point at the same database.

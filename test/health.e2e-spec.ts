@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { App } from 'supertest/types';
+// .js suffix: under nodenext ESM resolution a package subpath needs its extension.
+import type { App } from 'supertest/types.js';
 import { AppModule } from './../src/app.module.js';
 
 // Needs the PostgreSQL container running (`docker compose up -d`) and a filled-in .env.
