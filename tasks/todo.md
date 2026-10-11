@@ -70,14 +70,14 @@
 **Description:** Record the data model and its reasons, then open the stage 2 PR.
 
 **Acceptance criteria:**
-- [ ] `README.md`: how to run migrations, and the test database note
-- [ ] `docs/BUILD_LOG.md`: stage 2 entry
-- [ ] `docs/TECH_STACK.md`: Prisma migrations and PostgreSQL enums
-- [ ] `docs/INTERVIEW_PREP.md`: why the event ID is the primary key; why integer cents; why unique Stripe IDs make upserts safe; why `Restrict` on delete
-- [ ] PR from `stage-2-data-model` to `main`
+- [x] `README.md`: how to run migrations, and the test database note
+- [x] `docs/BUILD_LOG.md`: stage 2 entry
+- [x] `docs/TECH_STACK.md`: Prisma migrations and PostgreSQL enums
+- [x] `docs/INTERVIEW_PREP.md`: why the event ID is the primary key; why integer cents; why unique Stripe IDs make upserts safe; why `Restrict` on delete
+- [x] PR from `stage-2-data-model` to `main`
 
 **Verification:**
-- [ ] Manual check: a fresh clone can follow the README to a migrated database and green tests
+- [x] Manual check: a fresh clone can follow the README to a migrated database and green tests
 
 **Dependencies:** Task 3
 
@@ -86,6 +86,7 @@
 **Estimated scope:** Small (docs only)
 
 ## Checkpoint: Stage 2 complete
-- [ ] `npm test`, `npm run test:e2e`, `npm run build` and `npm run lint` all pass
-- [ ] Stage 2 "Done when" from `PROJECT.md` met
-- [ ] Commit, push, open PR; human review and merge before stage 3
+- [x] `npm test`, `npm run test:e2e`, `npm run build` and `npm run lint` all pass
+- [x] Stage 2 "Done when" from `PROJECT.md` met
+- [x] Commit, push, open PR
+- [ ] Human review and merge before stage 3

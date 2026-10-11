@@ -69,11 +69,11 @@ Tasks are tracked in `tasks/todo.md`.
 
 ### Phase 2: Orders, payments and refunds
 - [x] Task 3: `Order`, `Payment` and `Refund` models, second migration and relationship tests
-- [ ] Task 4: Docs and pull request
+- [x] Task 4: Docs and pull request
 
 ### Checkpoint: Stage 2 complete
-- [ ] `npx prisma migrate deploy` runs on a fresh database
-- [ ] All tests pass, build and lint clean
+- [x] `npx prisma migrate deploy` runs on a fresh database
+- [x] All tests pass, build and lint clean
 - [ ] PR opened; human review and merge before stage 3
 
 ## Risks and Mitigations
