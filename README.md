@@ -35,13 +35,21 @@ A NestJS backend that receives Stripe payment events, processes them through a R
 
    They listen on `localhost:5435` and `localhost:6380`, so they don't clash with other local databases. Change `POSTGRES_PORT` and `REDIS_PORT` in `.env` if those ports are taken too, and update `DATABASE_URL` and `REDIS_URL` to match.
 
-4. Start the API.
+4. Create the database tables.
+
+   ```bash
+   npx prisma migrate deploy
+   ```
+
+   After you change `prisma/schema.prisma`, create a new migration with `npm run db:migrate`. It runs `prisma migrate dev` and then `prisma generate`, because Prisma 7 no longer regenerates the client after a migration.
+
+5. Start the API.
 
    ```bash
    npm run start:dev
    ```
 
-5. Check that it is healthy.
+6. Check that it is healthy.
 
    ```bash
    curl http://localhost:3000/health

@@ -24,14 +24,14 @@
 **Description:** Add the `stripe_events` table, with the Stripe event ID as primary key. Create the first migration. Prove with a test that the database rejects a second event with the same ID.
 
 **Acceptance criteria:**
-- [ ] `StripeEvent` model: `id` (Stripe `evt_...`, primary key), `type`, `payload` (JSON), `status` enum (`PENDING`, `PROCESSED`, `FAILED`, default `PENDING`), `attempts` (default 0), `lastError` (optional), `stripeCreatedAt`, `receivedAt` (default now), `processedAt` (optional)
-- [ ] Migration `init_stripe_events` applies cleanly with `npx prisma migrate dev`
-- [ ] Test: inserting the same event ID twice leaves 1 row and the second insert fails with Prisma error `P2002`
+- [x] `StripeEvent` model: `id` (Stripe `evt_...`, primary key), `type`, `payload` (JSON), `status` enum (`PENDING`, `PROCESSED`, `FAILED`, default `PENDING`), `attempts` (default 0), `lastError` (optional), `stripeCreatedAt`, `receivedAt` (default now), `processedAt` (optional)
+- [x] Migration `init_stripe_events` applies cleanly with `npx prisma migrate dev`
+- [x] Test: inserting the same event ID twice leaves 1 row and the second insert fails with Prisma error `P2002`
 
 **Verification:**
-- [ ] Tests pass: `npm run test:e2e`
-- [ ] Manual check: temporarily remove `@id` from the event ID; the duplicate test fails. Restore it
-- [ ] Manual check: `\d stripe_events` in `psql` shows the primary key
+- [x] Tests pass: `npm run test:e2e`
+- [x] Manual check: temporarily remove `@id` from the event ID; the duplicate test fails. Restore it
+- [x] Manual check: `\d stripe_events` in `psql` shows the primary key
 
 **Dependencies:** Task 1
 
@@ -40,8 +40,8 @@
 **Estimated scope:** Small
 
 ## Checkpoint: Event store
-- [ ] Tasks 1–2 verified
-- [ ] Commit
+- [x] Tasks 1–2 verified
+- [x] Commit
 
 ## Task 3: Order, Payment and Refund models, second migration and relationship tests
 

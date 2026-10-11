@@ -1,5 +1,6 @@
 // Prisma schema: https://pris.ly/d/prisma-schema
-// Tables arrive in stage 2. The connection URL lives in prisma.config.ts (Prisma 7).
+// The connection URL lives in prisma.config.ts (Prisma 7).
+// Naming: camelCase in TypeScript, snake_case in PostgreSQL (@map / @@map).
 
 generator client {
   provider     = "prisma-client"
@@ -9,4 +10,32 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+enum StripeEventStatus {
+  PENDING
+  PROCESSED
+  FAILED
+
+  @@map("stripe_event_status")
+}
+
+/// Inbox of webhook events from Stripe. Stored first, processed later by the worker (stage 5).
+model StripeEvent {
+  /// Stripe's own event ID (evt_...). As the primary key it makes the database reject a duplicate
+  /// delivery of the same event, even when two copies arrive at the same moment.
+  id              String            @id
+  /// Event type, e.g. checkout.session.completed
+  type            String
+  /// The full event as Stripe sent it, kept for debugging and replays.
+  payload         Json
+  status          StripeEventStatus @default(PENDING)
+  attempts        Int               @default(0)
+  lastError       String?           @map("last_error")
+  /// When Stripe created the event (event.created); events can arrive out of order.
+  stripeCreatedAt DateTime          @map("stripe_created_at") @db.Timestamptz(3)
+  receivedAt      DateTime          @default(now()) @map("received_at") @db.Timestamptz(3)
+  processedAt     DateTime?         @map("processed_at") @db.Timestamptz(3)
+
+  @@map("stripe_events")
 }

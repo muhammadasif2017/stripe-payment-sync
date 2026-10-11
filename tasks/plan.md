@@ -61,11 +61,11 @@ Tasks are tracked in `tasks/todo.md`.
 
 ### Phase 1: Test database and event store
 - [x] Task 1: Test database setup
-- [ ] Task 2: `StripeEvent` model, first migration and duplicate-event test
+- [x] Task 2: `StripeEvent` model, first migration and duplicate-event test
 
 ### Checkpoint: Event store
-- [ ] Migration runs against both databases
-- [ ] Duplicate-event test passes and fails when the primary key is removed
+- [x] Migration runs against both databases
+- [x] Duplicate-event test passes and fails when the primary key is removed
 
 ### Phase 2: Orders, payments and refunds
 - [ ] Task 3: `Order`, `Payment` and `Refund` models, second migration and relationship tests
