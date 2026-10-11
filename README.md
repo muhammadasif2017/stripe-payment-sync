@@ -58,6 +58,8 @@ npm run test:e2e   # end-to-end tests; needs `docker compose up -d` and a filled
 npm run lint
 ```
 
+The end-to-end tests use their own database, `payments_test`, set by `TEST_DATABASE_URL` in `.env`. Before the tests run, they create it if it is missing and apply every migration, so your development data in `payments` is never touched. They refuse to run if both URLs point at the same database.
+
 ## Project docs
 
 - [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md): what was built in each stage and the problems hit along the way
