@@ -160,3 +160,6 @@ A non-2xx answer tells Stripe the delivery failed, so it would keep resending an
 
 **Why does the webhook not update the order itself?**
 Processing needs Stripe API calls and several database writes, which can be slow or fail. Stripe expects an answer within seconds and retries on a timeout, which would create duplicate work. The webhook only records the event; the worker (stage 5) does the work with its own retries, and the endpoint stays fast whatever happens downstream.
+
+**How do you test webhooks on your own machine?**
+Two ways. Automated tests sign their own payloads with `stripe.webhooks.generateTestHeaderString` and a test secret, so they need no network. For the real thing, the Stripe CLI's `stripe listen --forward-to localhost:3000/webhooks/stripe` opens a connection to Stripe and forwards test-mode events to the local app, signed with a secret it prints; `stripe trigger checkout.session.completed` creates a real test payment that fires the events.

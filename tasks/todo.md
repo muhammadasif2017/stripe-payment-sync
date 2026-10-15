@@ -73,15 +73,15 @@
 **Description:** Run the "Done when" with the Stripe CLI in test mode, record it, open the PR.
 
 **Acceptance criteria:**
-- [ ] `STRIPE_WEBHOOK_SECRET` in `.env` set from `stripe listen --print-secret` (test key, value never printed)
-- [ ] `stripe listen --forward-to localhost:3000/webhooks/stripe` + `stripe trigger checkout.session.completed`: 1 `checkout.session.completed` row, 1 job with the same ID
-- [ ] A request with a wrong signature returns 400
-- [ ] A real checkout from stage 3 paid with card 4242 also arrives as an event
-- [ ] `README.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md` (BullMQ, Redis, raw body), `docs/INTERVIEW_PREP.md` (why raw body, why answer fast, why job ID = event ID, what happens when each step fails)
-- [ ] PR from `stage-4-webhook-endpoint` to `main`
+- [x] `STRIPE_WEBHOOK_SECRET` in `.env` set from `stripe listen --print-secret` (test key, value never printed)
+- [x] `stripe listen --forward-to localhost:3000/webhooks/stripe` + `stripe trigger checkout.session.completed`: 1 `checkout.session.completed` row, 1 job with the same ID
+- [x] A request with a wrong signature returns 400
+- [x] A real checkout from stage 3 paid with card 4242 also arrives as an event
+- [x] `README.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md` (BullMQ, Redis, raw body), `docs/INTERVIEW_PREP.md` (why raw body, why answer fast, why job ID = event ID, what happens when each step fails)
+- [x] PR from `stage-4-webhook-endpoint` to `main`
 
 **Verification:**
-- [ ] Manual check with the Stripe CLI, database query and queue count
+- [x] Manual check with the Stripe CLI, database query and queue count
 
 **Dependencies:** Task 3
 
@@ -90,7 +90,7 @@
 **Estimated scope:** Small
 
 ## Checkpoint: Stage 4 complete
-- [ ] All five checks pass
-- [ ] Stage 4 "Done when" from `PROJECT.md` met
-- [ ] Commit, push, open PR
+- [x] All five checks pass
+- [x] Stage 4 "Done when" from `PROJECT.md` met
+- [x] Commit, push, open PR
 - [ ] Human review and merge before stage 5
