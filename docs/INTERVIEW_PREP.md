@@ -134,3 +134,32 @@ It thanks the customer and says the payment is being confirmed. It changes nothi
 
 **Why does the page load the course list from the API?**
 So prices are written in one place, the server's catalog. A price copied into the HTML could drift from the one charged, and the page would show one amount while Stripe charged another.
+
+## Stage 4: Webhook endpoint
+
+**Why use the Stripe event ID as the job ID?**
+BullMQ ignores a new job whose ID already exists. If Stripe delivers the same event twice, the second `add` does nothing, so the event is queued once. The database gives the same guarantee for the stored event, through the primary key. Completed jobs are kept for 7 days so a late duplicate still finds the old job.
+
+**Why does the queue connection fail fast when Redis is down?**
+By default the Redis client buffers commands until it reconnects, so the webhook request would hang. With the offline queue turned off, adding the job fails at once, the endpoint answers 500, and Stripe redelivers the event later. Stripe's retries become the safety net.
+
+**How do you know a webhook really comes from Stripe?**
+Stripe signs every request: the `Stripe-Signature` header holds an HMAC-SHA256 of a timestamp and the exact body, keyed with the endpoint's webhook secret. `stripe.webhooks.constructEvent` recomputes it and compares. Without the secret nobody can produce a valid signature, and changing one byte of the body breaks it. A wrong signature gets 400 and nothing is saved.
+
+**Why does the signature check need the raw body?**
+The HMAC covers the bytes Stripe sent. If the framework parses the JSON and the code turns it back into text, spaces, key order or number formatting can change and the signature never matches. NestJS's `rawBody: true` keeps the original bytes in `req.rawBody`.
+
+**What stops someone replaying a real, captured webhook?**
+The signed timestamp. `constructEvent` refuses signatures older than 5 minutes, so an old request fails even though its signature was once valid. Inside those 5 minutes a replay would be the same event ID, which the database stores only once.
+
+**What happens if the database or Redis fails in the middle of a webhook?**
+Each step is safe to repeat, so any failure is answered with 500 and Stripe's retry finishes the job. If the insert fails, nothing was saved and the redelivery inserts it. If the insert worked but queuing failed, the redelivery hits the primary key (treated as "already stored") and queues the job. If both worked but the 200 got lost, the redelivery changes nothing: same row, and BullMQ ignores the existing job ID. Stripe retries for up to 3 days.
+
+**Why answer 200 to event types you don't handle?**
+A non-2xx answer tells Stripe the delivery failed, so it would keep resending an event the system will never use. Answering 200 without saving it stops the retries and keeps `stripe_events` to the events that matter.
+
+**Why does the webhook not update the order itself?**
+Processing needs Stripe API calls and several database writes, which can be slow or fail. Stripe expects an answer within seconds and retries on a timeout, which would create duplicate work. The webhook only records the event; the worker (stage 5) does the work with its own retries, and the endpoint stays fast whatever happens downstream.
+
+**How do you test webhooks on your own machine?**
+Two ways. Automated tests sign their own payloads with `stripe.webhooks.generateTestHeaderString` and a test secret, so they need no network. For the real thing, the Stripe CLI's `stripe listen --forward-to localhost:3000/webhooks/stripe` opens a connection to Stripe and forwards test-mode events to the local app, signed with a secret it prints; `stripe trigger checkout.session.completed` creates a real test payment that fires the events.

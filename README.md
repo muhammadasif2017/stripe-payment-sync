@@ -4,7 +4,7 @@
 
 A NestJS backend that receives Stripe payment events, processes them through a Redis job queue with retries, and keeps a PostgreSQL database in sync. The full scope and build plan are in [`PROJECT.md`](PROJECT.md).
 
-**Status:** stage 3 of 8 (test checkout). The app validates its configuration, reports database health, and has tables for Stripe events, orders, payments and refunds. A minimal checkout page creates an order and sends the customer to Stripe's test-mode payment page. Webhooks, the queue and reconciliation arrive in later stages, so orders stay `PENDING` for now.
+**Status:** stage 4 of 8 (webhook endpoint). A minimal checkout page creates an order and sends the customer to Stripe's test-mode payment page. `POST /webhooks/stripe` verifies each Stripe event's signature, stores the events the system handles once, and queues them in Redis (BullMQ) for processing. The worker that updates orders arrives in stage 5, so orders stay `PENDING` and jobs wait in the queue for now.
 
 ## Data model
 
@@ -89,6 +89,32 @@ curl -X POST http://localhost:3000/checkout   -H 'Content-Type: application/json
 
 Only `courseId` and an optional `email` are accepted; the price comes from the server. Any other field, such as `amount`, gets a 400.
 
+## Receive Stripe webhooks locally
+
+Needs the [Stripe CLI](https://docs.stripe.com/stripe-cli). Run every CLI command with your **test** key, so the CLI can't touch live mode even if your login defaults to it. In Git Bash:
+
+```bash
+export STRIPE_API_KEY=$(grep '^STRIPE_SECRET_KEY=' .env | cut -d= -f2-)
+```
+
+In PowerShell: `$env:STRIPE_API_KEY = (Select-String '^STRIPE_SECRET_KEY=(.*)' .env).Matches.Groups[1].Value`.
+
+1. Put the webhook signing secret in `.env` as `STRIPE_WEBHOOK_SECRET`. Print it with `stripe listen --print-secret`; it stays the same for this machine.
+2. Start the API (`npm run start:dev`).
+3. Forward events to it:
+
+   ```bash
+   stripe listen --all-snapshot --latest --forward-to localhost:3000/webhooks/stripe
+   ```
+
+4. In another terminal, fire a test payment's events, or buy a course on the checkout page:
+
+   ```bash
+   stripe trigger checkout.session.completed
+   ```
+
+Every event gets 200. Only the types the system handles (`checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`, `payment_intent.canceled`, `charge.refunded`, `refund.updated`) are stored in `stripe_events` and queued, once each, with the Stripe event ID as both the row ID and the job ID. A request with a missing or wrong signature gets 400 and nothing is saved.
+
 ## Tests
 
 ```bash
@@ -98,7 +124,7 @@ npm run lint
 npm run typecheck  # type-checks src/ and test/; Vitest and the build skip test files
 ```
 
-The end-to-end tests use their own database, `payments_test`, set by `TEST_DATABASE_URL` in `.env`. Before the tests run, they create it if it is missing and apply every migration, so your development data in `payments` is never touched. They refuse to run if both URLs reach the same database (same host, port and name), or if the test database is not on this machine. For a throwaway database elsewhere, such as a CI service, set `ALLOW_REMOTE_TEST_DATABASE=true`.
+The end-to-end tests use their own database, `payments_test`, set by `TEST_DATABASE_URL` in `.env`, and their own Redis database, `TEST_REDIS_URL` (database 1). They sign their own webhook payloads with a fixed test secret. Before the tests run, they create it if it is missing and apply every migration, so your development data in `payments` is never touched. They refuse to run if both URLs reach the same database (same host, port and name), or if the test database is not on this machine. For a throwaway database elsewhere, such as a CI service, set `ALLOW_REMOTE_TEST_DATABASE=true`.
 
 ## Project docs
 

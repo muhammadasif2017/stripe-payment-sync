@@ -46,6 +46,7 @@ Run all five checks (unit, e2e, lint, typecheck, build) before every commit. A h
 ## Boundaries
 
 - Stripe test mode only. Never commit `.env` or any real key.
+- The Stripe CLI login defaults to live mode. Run every `stripe` command with `STRIPE_API_KEY` set to the test key from `.env`, never with `--live`, and never print key or webhook secret values.
 - Never run `prisma migrate reset` or drop tables on the `payments` database without the user's explicit consent.
 - Ports 5432 and 6379 belong to another project's containers; don't stop or change them.
 - Out of scope (from `PROJECT.md`): front end beyond a minimal checkout page, live mode, subscriptions, multiple currencies.
@@ -53,5 +54,6 @@ Run all five checks (unit, e2e, lint, typecheck, build) before every commit. A h
 ## Gotchas
 
 - Windows PowerShell 5.1 drops empty arguments: `gh pr merge --body ""` fails. Pass real text.
+- `stripe listen` needs `--all-snapshot` (or `--events`), and `--latest` so events use the API version the code targets.
 - npm's `latest` tag for Prisma points at an 8.x release candidate; stay on 7.10.0.
 - `prisma init` downloads agent skill folders (`.agents/`, `.claude/skills/`, `.windsurf/`); they are git-ignored, not part of the project. `.claude/settings.json` and `.claude/hooks/` are committed.

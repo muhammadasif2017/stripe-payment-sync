@@ -1,56 +1,51 @@
-# Implementation Plan: Stage 3 – Test Checkout
+# Implementation Plan: Stage 4 – Webhook Endpoint
 
 ## Overview
 
-Stage 3 lets a customer start a payment (see `PROJECT.md`, stage 3). An endpoint creates a `PENDING` order in PostgreSQL, then a Stripe Checkout Session in test mode with the order ID in its metadata, and returns the Stripe payment page URL. A minimal HTML page with a "Buy" button calls it, so a test payment can be made in the browser.
+Stage 4 receives Stripe's webhooks (see `PROJECT.md`, stage 4). `POST /webhooks/stripe` checks the Stripe signature against the raw request body, stores the event once in `stripe_events`, adds a BullMQ job whose job ID is the event ID, and answers 200 straight away. No processing happens in the request: the worker that updates orders, payments and refunds is stage 5, so jobs wait in the queue until then.
 
-**Done when (from `PROJECT.md`):** a payment with Stripe's test card 4242 4242 4242 4242 shows in the Stripe test dashboard.
+**Done when (from `PROJECT.md`):** `stripe listen --forward-to localhost:3000/webhooks/stripe` plus `stripe trigger checkout.session.completed` saves 1 event and 1 job, and a wrong signature returns 400.
 
-Nothing here marks an order as paid. That is the client's original bug: their backend trusts the success page, which the customer may never reach. In this project, only Stripe's webhook (stage 4) and the worker (stage 5) change an order's status.
-
-Stage 1 and 2 plans and tasks are archived in `tasks/archive/`.
+Stage 1–3 plans and tasks are archived in `tasks/archive/`.
 
 ## Flow
 
 ```
-Browser                     API                          PostgreSQL         Stripe
-  | POST /checkout {courseId} |                               |                 |
-  |-------------------------->| insert order (PENDING)  ----->|                 |
-  |                           | create Checkout Session ------------------------>|
-  |                           |   metadata.order_id, idempotency key = order id  |
-  |                           | save session id on order ---->|                 |
-  |<-- 201 {orderId, url} ----|                               |                 |
-  | redirect to url, pay with 4242 card ------------------------------------- -->|
-  |<-- Stripe redirects to /success.html (shows "processing", changes nothing)   |
+Stripe ──POST /webhooks/stripe──> verify signature (raw body + STRIPE_WEBHOOK_SECRET)
+                                     │ bad / missing ──> 400, nothing saved
+                                     │ live-mode event ──> 400, nothing saved
+                                     │ type not handled ──> 200, nothing saved
+                                     v
+                                  INSERT stripe_events (id = evt_...)
+                                     │ already there (P2002) ──> fine, continue
+                                     v
+                                  queue.add('stripe-events', { eventId }, { jobId: eventId })
+                                     v
+                                  200 { received: true }
 ```
 
 ## Architecture Decisions
 
-- **The server decides the price.** The request carries only a course ID and an optional email. Name, amount and currency come from a small course catalog in code. A client that sends `amount` is rejected (400), so nobody can buy a course for 1 cent by editing the request.
-- **The order is created before the Checkout Session.** The session needs the order ID in its metadata, so the order must exist first. A database row and a Stripe call can't share a transaction. If Stripe fails, the order stays `PENDING` with no session ID, the client gets a generic 502, and the cause is logged. No money moved, and the row shows the attempt happened.
-- **Idempotency key = order ID.** If the request to Stripe is retried (by the SDK on a network error), Stripe returns the same session instead of creating a second one.
-- **The order ID is in two places: `metadata.order_id` on the session and `payment_intent_data.metadata.order_id`.** Session metadata is not copied to the PaymentIntent. Stage 5 handles `payment_intent.payment_failed`, whose object is a PaymentIntent, so it needs the order ID there too. `client_reference_id` also carries it, which makes it visible in the Stripe dashboard. (Confirm against Stripe's docs while building.)
-- **Inline `price_data` instead of Products created in the dashboard.** Nothing to set up by hand in Stripe, and the catalog stays in the repository.
-- **Official `stripe` library, pinned to 23.0.0** (latest stable, released 2026-10-01). The client is one NestJS provider built from `STRIPE_SECRET_KEY` through `ConfigService`, so tests can replace it. The logging wrapper is stage 6.
-- **Request validation with `class-validator` and a global `ValidationPipe`** (`whitelist`, `forbidNonWhitelisted`). It is NestJS's standard way to validate request bodies; unknown fields fail with 400.
-- **New setting `APP_URL`** (e.g. `http://localhost:3000`) builds the success and cancel URLs. Validated at startup like the others.
-- **Tests never call Stripe.** Unit tests use a fake client, and e2e tests replace the Stripe provider. CI in stage 8 then needs no Stripe secret. The real payment with the test card is a manual check in the browser.
-- **Static pages from `public/`** (`index.html`, `success.html`, `cancel.html`) served by NestJS. No front-end framework (out of scope).
+- **The signature is checked on the raw body.** Stripe signs the exact bytes it sent. If NestJS parses the JSON first and the code re-serialises it, spacing or key order can differ and every signature fails. NestJS's `rawBody: true` option keeps the original bytes next to the parsed body. `constructEvent` also rejects signatures older than 5 minutes, which stops replayed requests.
+- **Store first, then enqueue, then answer 200.** The webhook only records the event; the worker does the work. Stripe gets its answer in milliseconds, and a slow database or Stripe API in stage 5 becomes a retry instead of a webhook timeout.
+- **Duplicates are handled twice over.** The event ID is the primary key, so a second delivery can't insert a second row (`P2002`, treated as success). The job ID is the event ID, so BullMQ ignores a second `add` while the job exists.
+- **Every failure before the 200 makes Stripe retry.** If the insert or the enqueue fails, the endpoint answers 500 and Stripe redelivers later (for up to 3 days). On redelivery the row already exists, the insert is skipped, and the enqueue runs again. Nothing is lost between the two writes.
+- **Only event types the worker handles are stored** (see decision 1). Others get 200 and are dropped, so Stripe stops sending them.
+- **Live-mode events are refused (400).** The project is test mode only, like the `sk_test_` check at startup.
+- **Queue settings are set now, because jobs are created now:** 5 attempts with exponential backoff (the stage 5 requirement), completed jobs kept for 7 days so a late duplicate still finds its job ID, failed jobs kept for the dashboard in stage 6.
+- **BullMQ 6.3.10 and `@nestjs/bullmq` 12.0.0**, pinned. BullMQ 6 no longer bundles a Redis client, so `ioredis` is installed too. Code is written from the installed types, not from memory of BullMQ 5.
+- **Tests use their own Redis database** (`TEST_REDIS_URL`, database 1 in the same container), with the same guard as the test PostgreSQL database. Tests sign their own payloads with `stripe.webhooks.generateTestHeaderString`, so they need no network and no Stripe CLI.
+- **The Stripe CLI always runs with the test key from `.env`** (`STRIPE_API_KEY`). Your CLI login defaults to live mode, and nothing here may touch live mode. The webhook secret printed by `stripe listen` goes into `.env` without being shown in the chat.
 
-## Decisions for you
+## Decision for you
 
-1. **Store the course on the order? (recommended: yes)** Add a `course_id` column to `orders` (migration `order_course_id`). Without it the database knows an amount was paid but not for what, so the client couldn't grant course access or report sales per course. The catalog in code maps `course_id` to name and price.
-2. **Minimal HTML page? (recommended: yes)** A one-button page makes the manual test card payment easy and gives a portfolio screenshot. The alternative is calling the endpoint with `curl` and opening the returned URL by hand.
-
-## Prerequisite (your action)
-
-`STRIPE_SECRET_KEY` in `.env` is a placeholder (18 characters; real test keys are much longer). Before task 5, copy your test secret key from the Stripe dashboard (Developers → API keys, test mode) into `.env` yourself. Don't paste it in the chat. The webhook secret and the Stripe CLI are needed only in stage 4.
+1. **Store only handled event types? (recommended: yes)** The allowlist: `checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`, `payment_intent.canceled`, `charge.refunded`, `refund.updated`. These are the events that change an order, payment or refund. The alternative is to store every event as an audit log; then `stripe trigger checkout.session.completed` saves about 6 events (product, price, payment intent, charge...), not the 1 the "Done when" expects.
 
 ## Risks
 
-- **Stripe 23 is a new major version.** Code is written from the installed type definitions and Stripe's docs, not from memory of older versions.
-- **Orders with no session pile up if Stripe is down.** Acceptable for now: they hold no money. Stage 7 (reconciliation) or a cleanup job could expire them.
-- **`price_data` amounts live in code.** Changing a price needs a deploy. Fine for a sample with one or two courses.
+- **BullMQ 6 is a new major version** (July 2026). If its NestJS integration misbehaves, fall back to BullMQ 5 (the last 5.x is mature and supported by `@nestjs/bullmq` 12).
+- **Jobs pile up until stage 5.** Expected; they are processed when the worker exists.
+- **`STRIPE_WEBHOOK_SECRET` from `stripe listen` is per CLI session.** It stays the same between runs on the same machine, but a deployed endpoint has a different secret from the Stripe dashboard.
 
 ## Task List
 

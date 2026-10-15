@@ -1,10 +1,8 @@
-import { Test } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
-import { AppModule } from './../src/app.module.js';
-import { serveCheckoutPages } from './../src/app.setup.js';
 import { STRIPE_CLIENT } from './../src/stripe/stripe.module.js';
+import { createTestApp } from './create-test-app.js';
 import { createTestPrisma } from './test-prisma.js';
 
 // Needs the PostgreSQL container running. Stripe is replaced by a fake, so no key or network is needed.
@@ -16,14 +14,11 @@ describe('POST /checkout (e2e)', () => {
   let app: NestExpressApplication;
 
   beforeAll(async () => {
-    const moduleFixture = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(STRIPE_CLIENT)
-      .useValue({ checkout: { sessions: { create: createSession } } })
-      .compile();
-
-    app = moduleFixture.createNestApplication<NestExpressApplication>();
-    serveCheckoutPages(app);
-    await app.init();
+    app = await createTestApp((builder) =>
+      builder
+        .overrideProvider(STRIPE_CLIENT)
+        .useValue({ checkout: { sessions: { create: createSession } } }),
+    );
   });
 
   beforeEach(() => {

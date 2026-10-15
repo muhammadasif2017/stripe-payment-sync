@@ -57,6 +57,10 @@ The official library, as the brief asks. It handles authentication, retries netw
 
 NestJS's standard way to check request bodies: decorators on a DTO class (`@IsString()`, `@IsEmail()`) and one global `ValidationPipe`. With `whitelist` and `forbidNonWhitelisted`, a body with a field the DTO doesn't declare fails with 400, which is how a client-sent `amount` is refused. `class-transformer` is required by the pipe to turn the JSON into a DTO instance.
 
+## BullMQ 6 and ioredis
+
+BullMQ is a job queue on Redis, as the brief asks. The webhook adds a job and answers Stripe at once; a worker (stage 5) does the work and BullMQ retries it with backoff when it fails. Jobs survive an app restart because they live in Redis, which runs with `appendonly yes` so they survive a Redis restart too. A custom job ID gives deduplication for free: adding a job whose ID already exists is ignored. BullMQ 6 can talk to several backends, so the Redis client (`ioredis`) is a separate install. `@nestjs/bullmq` provides the queue as an injectable NestJS provider.
+
 ## Claude Code hooks
 
 The AI coding assistant reads `CLAUDE.md` at the start of each session, but those rules are only advice. A hook is a script the tool runs at fixed points, here before every shell command, and it can block the command. `.claude/hooks/commit-guard.mjs` is plain Node.js with no dependencies, so it runs the same in Git Bash and PowerShell. It only affects the assistant; commits typed by a person go straight to git.

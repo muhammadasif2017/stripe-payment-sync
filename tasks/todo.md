@@ -1,108 +1,96 @@
-# Stage 3 – Test Checkout: Tasks
+# Stage 4 – Webhook Endpoint: Tasks
 
-## Task 1: Stripe client and settings
+## Task 1: BullMQ queue and test Redis
 
-**Description:** Install the official Stripe library and provide one configured client to the rest of the app. Add the `APP_URL` setting.
+**Description:** Connect to Redis and register the `stripe-events` queue with its retry settings. Give the e2e tests their own Redis database.
 
 **Acceptance criteria:**
-- [x] `stripe@23.0.0` installed with an exact version
-- [x] `StripeModule` (global) provides the client under an injection token, built from `STRIPE_SECRET_KEY` via `ConfigService<Env, true>`
-- [x] `APP_URL` validated in `src/config/env.validation.ts` (http/https URL) and added to `.env.example`
+- [x] `bullmq@6.3.10`, `@nestjs/bullmq@12.0.0` and `ioredis` installed with exact versions
+- [x] `QueueModule` registers the `stripe-events` queue from `REDIS_URL`: 5 attempts, exponential backoff, completed jobs kept 7 days, failed jobs kept
+- [x] `TEST_REDIS_URL` in `.env.example` (database 1); the e2e config points `REDIS_URL` at it and refuses the same database as `REDIS_URL`
+- [x] A shared `test/create-test-app.ts` builds the app the way `main.ts` does (raw body, checkout pages), so e2e tests can't drift from it
 
 **Verification:**
-- [x] Unit tests: the provider builds a client from the configured key; env validation rejects a missing or invalid `APP_URL`
-- [x] `npm run typecheck`, `npm test`
+- [x] e2e: adding two jobs with the same job ID leaves 1 job; the queue's default options are the ones above
+- [x] Unit tests for the Redis test-URL guard
+- [x] All five checks pass
 
 **Dependencies:** None
 
-**Files likely touched:** `package.json`, `src/stripe/stripe.module.ts`, `src/config/env.validation.ts`, `.env.example`, `src/app.module.ts`
-
-**Estimated scope:** Small
-
-## Task 2: Course catalog and `course_id` on orders
-
-**Description:** A small catalog in code (course ID → name, amount in cents, currency). Store the course ID on each order.
-
-**Acceptance criteria:**
-- [x] `src/checkout/catalog.ts` with two test courses and a lookup that returns `undefined` for an unknown ID
-- [x] Migration `order_course_id` adds `course_id` (text, required) to `orders`
-
-**Verification:**
-- [x] Unit tests for the lookup
-- [x] `npm run test:e2e`: existing order tests updated and passing
-
-**Dependencies:** None (needs decision 1)
-
-**Files likely touched:** `src/checkout/catalog.ts`, `prisma/schema.prisma`, `prisma/migrations/*_order_course_id/`, `test/orders.e2e-spec.ts`
-
-**Estimated scope:** Small
-
-## Checkpoint: Foundations
-- [x] Tasks 1–2 verified, all five checks pass, commit
-
-## Task 3: Checkout endpoint
-
-**Description:** `POST /checkout` with `{ courseId, email? }`. Creates a `PENDING` order, then a Checkout Session, saves the session ID on the order and returns `201 { orderId, checkoutUrl }`.
-
-**Acceptance criteria:**
-- [x] Global `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`); DTO validated with `class-validator`
-- [x] Session: `mode: 'payment'`, inline `price_data` from the catalog, `metadata.order_id`, `payment_intent_data.metadata.order_id`, `client_reference_id`, `customer_email` when given, success URL with `{CHECKOUT_SESSION_ID}`, cancel URL, idempotency key = order ID
-- [x] Unknown course or extra fields such as `amount`: 400, no order created
-- [x] Stripe error: 502 with a generic message, cause logged, order stays `PENDING` without a session ID
-
-**Verification:**
-- [x] Unit tests with a fake Stripe client: exact session parameters and idempotency key
-- [x] e2e tests with the Stripe provider replaced: order row saved with the session ID and course; 400 cases leave no row; 502 case leaves a `PENDING` order without session ID and no Stripe error text in the response
-- [x] Prove the tests can fail (e.g. drop the metadata or the idempotency key)
-
-**Dependencies:** Tasks 1, 2
-
-**Files likely touched:** `src/checkout/checkout.module.ts`, `checkout.controller.ts`, `checkout.service.ts`, `dto/create-checkout.dto.ts`, `src/main.ts`, `test/checkout.e2e-spec.ts`
+**Files likely touched:** `package.json`, `src/queue/queue.module.ts`, `src/app.module.ts`, `vitest.config.e2e.ts`, `test/test-redis.ts`, `test/create-test-app.ts`, `.env.example`
 
 **Estimated scope:** Medium
 
-## Task 4: Minimal checkout pages
+## Task 2: Webhook endpoint with signature check
 
-**Description:** `public/index.html` lists the courses with a "Buy" button that calls `POST /checkout` and redirects to Stripe. `success.html` says the payment is being confirmed; `cancel.html` offers to try again. Neither page changes the database.
-
-**Acceptance criteria:**
-- [x] Pages served from `public/` by NestJS
-- [x] Success page makes no API call that changes the order
-
-**Verification:**
-- [x] e2e: `GET /` and `GET /success.html` return 200 HTML; the order stays `PENDING` after loading the success page
-
-**Dependencies:** Task 3 (needs decision 2)
-
-**Files likely touched:** `public/*.html`, `src/main.ts`, `test/checkout.e2e-spec.ts`
-
-**Estimated scope:** Small
-
-## Checkpoint: Endpoint and pages
-- [x] Tasks 3–4 verified, all five checks pass, commit
-
-## Task 5: Real test payment, docs and pull request
-
-**Description:** With your real test key in `.env`, pay with the 4242 card and check the Stripe test dashboard. Record the stage in the docs and open the PR.
+**Description:** `POST /webhooks/stripe` verifies the `Stripe-Signature` header against the raw body with `STRIPE_WEBHOOK_SECRET`.
 
 **Acceptance criteria:**
-- [x] Payment with 4242 4242 4242 4242 shows as succeeded in the Stripe test dashboard, with `order_id` in its metadata (screenshot for the portfolio)
-- [x] The order is still `PENDING` in the database (the webhook in stage 4 will change it)
-- [x] `README.md`: status stage 3, how to make a test payment
-- [x] `docs/BUILD_LOG.md`, `docs/TECH_STACK.md` (Stripe library, class-validator), `docs/INTERVIEW_PREP.md` (why the server sets the price, why the success page doesn't mark orders paid, why the idempotency key, why order ID is in two metadata places)
-- [x] PR from `stage-3-test-checkout` to `main`
+- [x] `rawBody: true` in `main.ts` and in the test app
+- [x] Missing header, wrong signature, wrong secret, old timestamp or a tampered body: 400, nothing saved, no job
+- [x] Live-mode event: 400, nothing saved
+- [x] The cause is logged; the response says only that the signature is invalid
 
 **Verification:**
-- [x] Manual check in the browser and the Stripe dashboard
+- [x] e2e tests with payloads signed by `generateTestHeaderString`
+- [x] Prove a test can fail (e.g. skip the check)
 
-**Dependencies:** Tasks 3–4; your real test key
+**Dependencies:** Task 1
+
+**Files likely touched:** `src/webhooks/webhooks.module.ts`, `webhooks.controller.ts`, `src/main.ts`, `test/webhooks.e2e-spec.ts`
+
+**Estimated scope:** Small to medium
+
+## Checkpoint: Queue and signature
+- [x] Tasks 1–2 verified, all five checks pass, commit
+
+## Task 3: Store the event and enqueue it
+
+**Description:** After the signature check, save the event and add one job, then answer 200.
+
+**Acceptance criteria:**
+- [x] Handled types (decision 1) are stored with `id`, `type`, `payload`, `stripeCreatedAt`, status `PENDING`; other types get 200 and are not stored
+- [x] Job `{ eventId }` with `jobId = event.id`
+- [x] A duplicate delivery returns 200 and leaves 1 row and 1 job
+- [x] If the insert or the enqueue fails: 500 (Stripe retries); a retry after a failed enqueue adds the job
+
+**Verification:**
+- [x] e2e: valid event gives 1 row + 1 job; same event twice gives 1 + 1; unhandled type gives 0 + 0; enqueue failure gives 500 and a later redelivery gives 1 + 1
+- [x] Unit tests for the service's duplicate and failure paths
+- [x] Prove a test can fail (e.g. drop the job ID)
+
+**Dependencies:** Task 2
+
+**Files likely touched:** `src/webhooks/webhooks.service.ts`, `src/webhooks/handled-events.ts`, tests
+
+**Estimated scope:** Medium
+
+## Checkpoint: Endpoint complete
+- [x] Tasks 1–3 verified, all five checks pass, commit
+
+## Task 4: Real Stripe check, docs and pull request
+
+**Description:** Run the "Done when" with the Stripe CLI in test mode, record it, open the PR.
+
+**Acceptance criteria:**
+- [x] `STRIPE_WEBHOOK_SECRET` in `.env` set from `stripe listen --print-secret` (test key, value never printed)
+- [x] `stripe listen --forward-to localhost:3000/webhooks/stripe` + `stripe trigger checkout.session.completed`: 1 `checkout.session.completed` row, 1 job with the same ID
+- [x] A request with a wrong signature returns 400
+- [x] A real checkout from stage 3 paid with card 4242 also arrives as an event
+- [x] `README.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md` (BullMQ, Redis, raw body), `docs/INTERVIEW_PREP.md` (why raw body, why answer fast, why job ID = event ID, what happens when each step fails)
+- [x] PR from `stage-4-webhook-endpoint` to `main`
+
+**Verification:**
+- [x] Manual check with the Stripe CLI, database query and queue count
+
+**Dependencies:** Task 3
 
 **Files likely touched:** `README.md`, `docs/*.md`
 
 **Estimated scope:** Small
 
-## Checkpoint: Stage 3 complete
+## Checkpoint: Stage 4 complete
 - [x] All five checks pass
-- [x] Stage 3 "Done when" from `PROJECT.md` met
+- [x] Stage 4 "Done when" from `PROJECT.md` met
 - [x] Commit, push, open PR
-- [ ] Human review and merge before stage 4
+- [ ] Human review and merge before stage 5
