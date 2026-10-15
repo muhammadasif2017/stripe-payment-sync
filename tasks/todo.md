@@ -45,15 +45,15 @@
 **Description:** `POST /checkout` with `{ courseId, email? }`. Creates a `PENDING` order, then a Checkout Session, saves the session ID on the order and returns `201 { orderId, checkoutUrl }`.
 
 **Acceptance criteria:**
-- [ ] Global `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`); DTO validated with `class-validator`
-- [ ] Session: `mode: 'payment'`, inline `price_data` from the catalog, `metadata.order_id`, `payment_intent_data.metadata.order_id`, `client_reference_id`, `customer_email` when given, success URL with `{CHECKOUT_SESSION_ID}`, cancel URL, idempotency key = order ID
-- [ ] Unknown course or extra fields such as `amount`: 400, no order created
-- [ ] Stripe error: 502 with a generic message, cause logged, order stays `PENDING` without a session ID
+- [x] Global `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`); DTO validated with `class-validator`
+- [x] Session: `mode: 'payment'`, inline `price_data` from the catalog, `metadata.order_id`, `payment_intent_data.metadata.order_id`, `client_reference_id`, `customer_email` when given, success URL with `{CHECKOUT_SESSION_ID}`, cancel URL, idempotency key = order ID
+- [x] Unknown course or extra fields such as `amount`: 400, no order created
+- [x] Stripe error: 502 with a generic message, cause logged, order stays `PENDING` without a session ID
 
 **Verification:**
-- [ ] Unit tests with a fake Stripe client: exact session parameters and idempotency key
-- [ ] e2e tests with the Stripe provider replaced: order row saved with the session ID and course; 400 cases leave no row; 502 case leaves a `PENDING` order without session ID and no Stripe error text in the response
-- [ ] Prove the tests can fail (e.g. drop the metadata or the idempotency key)
+- [x] Unit tests with a fake Stripe client: exact session parameters and idempotency key
+- [x] e2e tests with the Stripe provider replaced: order row saved with the session ID and course; 400 cases leave no row; 502 case leaves a `PENDING` order without session ID and no Stripe error text in the response
+- [x] Prove the tests can fail (e.g. drop the metadata or the idempotency key)
 
 **Dependencies:** Tasks 1, 2
 

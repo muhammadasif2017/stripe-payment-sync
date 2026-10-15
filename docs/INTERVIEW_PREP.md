@@ -110,3 +110,18 @@ Anything the browser sends can be edited. If the request carried the amount, any
 
 **Why store `course_id` on the order?**
 Without it, the database knows that 49 dollars were paid but not what for: the client couldn't grant access to the right course or report sales per course, which was one of their complaints.
+
+**Why create the order before the Checkout Session?**
+The session's metadata must carry the order ID, so the order has to exist first. The database insert and the call to Stripe can't share a transaction. If Stripe fails, the order stays `PENDING` with no session ID: no money moved, and the row records the attempt. The customer gets a generic 502 and can try again.
+
+**Why use the order ID as the idempotency key?**
+If the request to Stripe times out after Stripe created the session, a retry with the same key returns that same session instead of creating a second one. One order can then never have two payment pages that could both be paid.
+
+**Why put the order ID in two metadata places?**
+Stripe doesn't copy a Checkout Session's metadata to the PaymentIntent it creates (Stripe's metadata docs say so). Some events, like `payment_intent.payment_failed`, carry only the PaymentIntent. `payment_intent_data.metadata` puts the order ID there too, so the worker in stage 5 can find the order from either event.
+
+**Why return 502 and not the Stripe error?**
+Stripe's error text can include details about the account or the API key. The client only needs to know that the payment provider failed and that it can retry. The full error, with Stripe's request ID for their support team, goes to the server log.
+
+**Why only card payments?**
+Some payment methods, such as bank debits, stay "processing" for days. The data model has no state for that yet, so the session uses `allowed_payment_method_types: ['card']`, where the result is known in seconds.
