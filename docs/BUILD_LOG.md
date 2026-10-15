@@ -128,7 +128,9 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 ### What was built
 
 - **Task 1: Queue and test Redis.** `bullmq@6.3.10`, `@nestjs/bullmq@12.0.0` and `ioredis@6.0.0` (BullMQ 6 no longer bundles a Redis client). `QueueModule` connects to `REDIS_URL` and registers the `stripe-events` queue: 5 attempts with exponential backoff from 10 seconds, completed jobs kept 7 days, failed jobs kept. The producer connection doesn't buffer commands while Redis is down, so a webhook fails fast instead of hanging. The e2e tests use Redis database 1 (`TEST_REDIS_URL`), with the same guard as the test PostgreSQL database. `test/create-test-app.ts` builds the app with the same options as `main.ts` (`APP_OPTIONS`, now with `rawBody: true`) and the checkout pages.
+- **Task 2: Signature check.** `POST /webhooks/stripe` passes the raw body and the `Stripe-Signature` header to `stripe.webhooks.constructEvent` with `STRIPE_WEBHOOK_SECRET`. A missing header, a wrong secret, a changed body, a signature older than 5 minutes or a live-mode event gets 400 with a generic message; the reason is logged as a warning. The e2e tests sign their own payloads with `generateTestHeaderString` and a fixed test secret.
 
 ### Verified
 
 - Task 1: 61 unit tests and 23 e2e tests pass. Adding the same job ID twice leaves 1 job; adding the second without the job ID makes the test fail. The development Redis (database 0) stays empty after the tests.
+- Task 2: 30 e2e tests pass. Replacing `constructEvent` with `constructEventWithoutVerification` fails the 4 rejection tests; turning off `rawBody` fails the valid-signature test.

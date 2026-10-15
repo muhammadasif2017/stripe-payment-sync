@@ -26,14 +26,14 @@
 **Description:** `POST /webhooks/stripe` verifies the `Stripe-Signature` header against the raw body with `STRIPE_WEBHOOK_SECRET`.
 
 **Acceptance criteria:**
-- [ ] `rawBody: true` in `main.ts` and in the test app
-- [ ] Missing header, wrong signature, wrong secret, old timestamp or a tampered body: 400, nothing saved, no job
-- [ ] Live-mode event: 400, nothing saved
-- [ ] The cause is logged; the response says only that the signature is invalid
+- [x] `rawBody: true` in `main.ts` and in the test app
+- [x] Missing header, wrong signature, wrong secret, old timestamp or a tampered body: 400, nothing saved, no job
+- [x] Live-mode event: 400, nothing saved
+- [x] The cause is logged; the response says only that the signature is invalid
 
 **Verification:**
-- [ ] e2e tests with payloads signed by `generateTestHeaderString`
-- [ ] Prove a test can fail (e.g. skip the check)
+- [x] e2e tests with payloads signed by `generateTestHeaderString`
+- [x] Prove a test can fail (e.g. skip the check)
 
 **Dependencies:** Task 1
 
@@ -42,7 +42,7 @@
 **Estimated scope:** Small to medium
 
 ## Checkpoint: Queue and signature
-- [ ] Tasks 1–2 verified, all five checks pass, commit
+- [x] Tasks 1–2 verified, all five checks pass, commit
 
 ## Task 3: Store the event and enqueue it
 

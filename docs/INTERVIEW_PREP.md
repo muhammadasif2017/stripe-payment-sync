@@ -142,3 +142,12 @@ BullMQ ignores a new job whose ID already exists. If Stripe delivers the same ev
 
 **Why does the queue connection fail fast when Redis is down?**
 By default the Redis client buffers commands until it reconnects, so the webhook request would hang. With the offline queue turned off, adding the job fails at once, the endpoint answers 500, and Stripe redelivers the event later. Stripe's retries become the safety net.
+
+**How do you know a webhook really comes from Stripe?**
+Stripe signs every request: the `Stripe-Signature` header holds an HMAC-SHA256 of a timestamp and the exact body, keyed with the endpoint's webhook secret. `stripe.webhooks.constructEvent` recomputes it and compares. Without the secret nobody can produce a valid signature, and changing one byte of the body breaks it. A wrong signature gets 400 and nothing is saved.
+
+**Why does the signature check need the raw body?**
+The HMAC covers the bytes Stripe sent. If the framework parses the JSON and the code turns it back into text, spaces, key order or number formatting can change and the signature never matches. NestJS's `rawBody: true` keeps the original bytes in `req.rawBody`.
+
+**What stops someone replaying a real, captured webhook?**
+The signed timestamp. `constructEvent` refuses signatures older than 5 minutes, so an old request fails even though its signature was once valid. Inside those 5 minutes a replay would be the same event ID, which the database stores only once.

@@ -7,6 +7,7 @@ import { HealthModule } from './health/health.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { QueueModule } from './queue/queue.module.js';
 import { StripeModule } from './stripe/stripe.module.js';
+import { WebhooksModule } from './webhooks/webhooks.module.js';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { StripeModule } from './stripe/stripe.module.js';
     QueueModule,
     HealthModule,
     CheckoutModule,
+    WebhooksModule,
   ],
   providers: [
     // Registered here rather than in main.ts so e2e tests, which build the app from this module, get it too.

@@ -16,6 +16,8 @@ export default defineConfig({
     env: {
       DATABASE_URL: resolveTestDatabaseUrl(process.env),
       REDIS_URL: resolveTestRedisUrl(process.env),
+      // Tests sign their own webhook payloads with this secret, so they don't depend on .env or the CLI.
+      STRIPE_WEBHOOK_SECRET: 'whsec_e2e_test_secret',
     },
     // Database test files share one database; run them one at a time so their rows don't collide.
     fileParallelism: false,
