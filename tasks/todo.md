@@ -86,14 +86,14 @@
 **Description:** With your real test key in `.env`, pay with the 4242 card and check the Stripe test dashboard. Record the stage in the docs and open the PR.
 
 **Acceptance criteria:**
-- [ ] Payment with 4242 4242 4242 4242 shows as succeeded in the Stripe test dashboard, with `order_id` in its metadata (screenshot for the portfolio)
-- [ ] The order is still `PENDING` in the database (the webhook in stage 4 will change it)
-- [ ] `README.md`: status stage 3, how to make a test payment
-- [ ] `docs/BUILD_LOG.md`, `docs/TECH_STACK.md` (Stripe library, class-validator), `docs/INTERVIEW_PREP.md` (why the server sets the price, why the success page doesn't mark orders paid, why the idempotency key, why order ID is in two metadata places)
-- [ ] PR from `stage-3-test-checkout` to `main`
+- [x] Payment with 4242 4242 4242 4242 shows as succeeded in the Stripe test dashboard, with `order_id` in its metadata (screenshot for the portfolio)
+- [x] The order is still `PENDING` in the database (the webhook in stage 4 will change it)
+- [x] `README.md`: status stage 3, how to make a test payment
+- [x] `docs/BUILD_LOG.md`, `docs/TECH_STACK.md` (Stripe library, class-validator), `docs/INTERVIEW_PREP.md` (why the server sets the price, why the success page doesn't mark orders paid, why the idempotency key, why order ID is in two metadata places)
+- [x] PR from `stage-3-test-checkout` to `main`
 
 **Verification:**
-- [ ] Manual check in the browser and the Stripe dashboard
+- [x] Manual check in the browser and the Stripe dashboard
 
 **Dependencies:** Tasks 3–4; your real test key
 
@@ -102,7 +102,7 @@
 **Estimated scope:** Small
 
 ## Checkpoint: Stage 3 complete
-- [ ] All five checks pass
-- [ ] Stage 3 "Done when" from `PROJECT.md` met
-- [ ] Commit, push, open PR
+- [x] All five checks pass
+- [x] Stage 3 "Done when" from `PROJECT.md` met
+- [x] Commit, push, open PR
 - [ ] Human review and merge before stage 4
