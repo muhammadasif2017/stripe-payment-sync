@@ -24,12 +24,12 @@
 **Description:** A small catalog in code (course ID → name, amount in cents, currency). Store the course ID on each order.
 
 **Acceptance criteria:**
-- [ ] `src/checkout/catalog.ts` with two test courses and a lookup that returns `undefined` for an unknown ID
-- [ ] Migration `order_course_id` adds `course_id` (text, required) to `orders`
+- [x] `src/checkout/catalog.ts` with two test courses and a lookup that returns `undefined` for an unknown ID
+- [x] Migration `order_course_id` adds `course_id` (text, required) to `orders`
 
 **Verification:**
-- [ ] Unit tests for the lookup
-- [ ] `npm run test:e2e`: existing order tests updated and passing
+- [x] Unit tests for the lookup
+- [x] `npm run test:e2e`: existing order tests updated and passing
 
 **Dependencies:** None (needs decision 1)
 
@@ -38,7 +38,7 @@
 **Estimated scope:** Small
 
 ## Checkpoint: Foundations
-- [ ] Tasks 1–2 verified, all five checks pass, commit
+- [x] Tasks 1–2 verified, all five checks pass, commit
 
 ## Task 3: Checkout endpoint
 

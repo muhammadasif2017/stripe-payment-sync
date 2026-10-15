@@ -104,3 +104,9 @@ Each major version of `stripe` moves to a newer Stripe API version, and API vers
 
 **Why change the Stripe client's retries and timeout?**
 The library's default timeout is 80 seconds, which is far too long for a customer waiting for the payment page. 20 seconds fails faster, and 2 automatic retries cover short network blips. Retries are safe because the library sends an idempotency key, so Stripe treats a retried request as the same request instead of creating a second session.
+
+**Why is the price in the server's catalog and not in the request?**
+Anything the browser sends can be edited. If the request carried the amount, anyone could open the developer tools and buy a course for 1 cent. The request carries only a course ID; the server looks up the name and price and sends those to Stripe.
+
+**Why store `course_id` on the order?**
+Without it, the database knows that 49 dollars were paid but not what for: the client couldn't grant access to the right course or report sales per course, which was one of their complaints.

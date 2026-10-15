@@ -100,11 +100,15 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 ### What was built
 
 - **Task 1: Stripe client and settings.** `stripe@23.0.0` installed with an exact version. `StripeModule` (global) provides one client under the `STRIPE_CLIENT` token, built from `STRIPE_SECRET_KEY`, with 2 network retries and a 20-second timeout. New setting `APP_URL` (http or https, no trailing slash) for Stripe's success and cancel redirects.
+- **Task 2: Course catalog and `course_id`.** `src/checkout/catalog.ts` holds two sample courses with their prices; `findCourse` uses a `Map`, so IDs like `__proto__` find nothing. Migration `order_course_id` adds a required `course_id` column to `orders`.
 
 ### Problems and fixes
 
 - **`npm audit` reports 9 vulnerabilities.** None come from `stripe`: they are in development tools (`prisma` pulls in `mysql2` and `deepmerge-ts`, `@nestjs/mau` pulls in `tmp` and `undici`) and were already there on `main`. Left as they are; `npm audit fix --force` would install breaking versions. Revisit in stage 8.
+- **A required column on an existing table.** Prisma warns that `ADD COLUMN course_id TEXT NOT NULL` fails if `orders` has rows. The development and test databases had none, so it applied cleanly. On a database with orders it would need a default or a backfill first.
+- **Prettier reformatted older files.** `.prettierrc` has no `printWidth`, so Prettier wraps at 80 columns while the existing code uses about 100. The formatting-only changes were reverted; only new files were formatted.
 
 ### Verified
 
 - Task 1: 41 unit tests and 10 e2e tests pass; lint, type check and build are clean. Changing `STRIPE_API_VERSION` makes the version test fail.
+- Task 2: 48 unit tests and 10 e2e tests pass. Replacing the `Map` lookup with a plain-object lookup makes the `__proto__` and `constructor` tests fail.
