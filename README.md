@@ -4,7 +4,18 @@
 
 A NestJS backend that receives Stripe payment events, processes them through a Redis job queue with retries, and keeps a PostgreSQL database in sync. The full scope and build plan are in [`PROJECT.md`](PROJECT.md).
 
-**Status:** stage 1 of 8 (project setup). The app starts, validates its configuration and reports database health. Stripe webhooks, the queue and reconciliation arrive in later stages.
+**Status:** stage 2 of 8 (data model). The app starts, validates its configuration, reports database health, and has tables for Stripe events, orders, payments and refunds. Stripe webhooks, the queue and reconciliation arrive in later stages.
+
+## Data model
+
+| Table | Holds | Key point |
+|---|---|---|
+| `stripe_events` | Every webhook event Stripe sends, as received | The Stripe event ID is the primary key, so a duplicate delivery is rejected by the database |
+| `orders` | A customer's purchase | Amount in cents; `PENDING` until paid |
+| `payments` | Each payment attempt for an order | Unique Stripe payment intent ID |
+| `refunds` | Full or partial refunds of a payment | Unique Stripe refund ID |
+
+Orders link to payments and payments to refunds. A payment or refund cannot be orphaned: deleting an order that has payments is refused. The schema is in [`prisma/schema.prisma`](prisma/schema.prisma), with a comment on each decision.
 
 ## Requirements
 
@@ -35,13 +46,21 @@ A NestJS backend that receives Stripe payment events, processes them through a R
 
    They listen on `localhost:5435` and `localhost:6380`, so they don't clash with other local databases. Change `POSTGRES_PORT` and `REDIS_PORT` in `.env` if those ports are taken too, and update `DATABASE_URL` and `REDIS_URL` to match.
 
-4. Start the API.
+4. Create the database tables.
+
+   ```bash
+   npx prisma migrate deploy
+   ```
+
+   After you change `prisma/schema.prisma`, create a new migration with `npm run db:migrate`. It runs `prisma migrate dev` and then `prisma generate`, because Prisma 7 no longer regenerates the client after a migration.
+
+5. Start the API.
 
    ```bash
    npm run start:dev
    ```
 
-5. Check that it is healthy.
+6. Check that it is healthy.
 
    ```bash
    curl http://localhost:3000/health
@@ -56,7 +75,10 @@ A NestJS backend that receives Stripe payment events, processes them through a R
 npm test           # unit tests
 npm run test:e2e   # end-to-end tests; needs `docker compose up -d` and a filled-in .env
 npm run lint
+npm run typecheck  # type-checks src/ and test/; Vitest and the build skip test files
 ```
+
+The end-to-end tests use their own database, `payments_test`, set by `TEST_DATABASE_URL` in `.env`. Before the tests run, they create it if it is missing and apply every migration, so your development data in `payments` is never touched. They refuse to run if both URLs reach the same database (same host, port and name), or if the test database is not on this machine. For a throwaway database elsewhere, such as a CI service, set `ALLOW_REMOTE_TEST_DATABASE=true`.
 
 ## Project docs
 

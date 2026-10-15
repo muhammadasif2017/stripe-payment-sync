@@ -16,6 +16,8 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "oxlint src/ test/",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "prisma migrate dev && prisma generate",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",

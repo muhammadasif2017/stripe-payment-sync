@@ -38,3 +38,37 @@ One entry per stage: what was built, what went wrong, and what was decided.
 - `npm test`: 15 unit tests pass. `npm run test:e2e`: 1 test passes. `npm run build` and `npm run lint` are clean.
 - With a variable removed from `.env`, the app exits with `"STRIPE_WEBHOOK_SECRET" is required`.
 - `/health` returned 200, then 503 after `docker compose stop postgres`, then 200 again after `docker compose start postgres`. The app kept running throughout.
+
+## Stage 2: Data model (2026-10-11)
+
+### What was built
+
+- A separate test database, `payments_test`. A Vitest global setup creates it if missing and applies every migration before the e2e tests. A guard refuses to run when `TEST_DATABASE_URL` and `DATABASE_URL` name the same database.
+- Migration `init_stripe_events`: the `stripe_events` table, with the Stripe event ID as primary key.
+- Migration `orders_payments_refunds`: `orders`, `payments` and `refunds`, linked with `ON DELETE RESTRICT`, each Stripe ID unique, money in integer cents.
+- `npm run typecheck` and `npm run db:migrate` scripts.
+
+### Problems and fixes
+
+- **A type error nobody saw.** `test/health.e2e-spec.ts` (from the NestJS scaffold) imported `supertest/types`, which TypeScript cannot resolve under `nodenext` without the `.js` ending. Vitest doesn't type-check and the build skips `test/`, so nothing caught it. Fixed the import and added `npm run typecheck`.
+- **Prisma 7 does not regenerate the client after `migrate dev`.** The first test run failed with `Cannot read properties of undefined (reading 'deleteMany')`. Added `npm run db:migrate`, which runs both steps.
+- **Prisma blocks `migrate reset` from AI agents** without explicit user consent. To prove the migrations replay on an empty database, they were applied to a throwaway `payments_replay` database instead, then it was dropped.
+- **Slower e2e runs.** About 18 seconds instead of 4, mostly the Prisma CLI starting up for `migrate deploy` in the global setup.
+
+### Verified
+
+- `npm test`: 19 unit tests pass. `npm run test:e2e`: 7 tests pass. Build, lint and type check are clean.
+- Dropping the primary key on `stripe_events` (test database only) makes the duplicate-event test fail; restoring it makes it pass.
+- Switching the payments foreign key to `ON DELETE CASCADE` (test database only) makes the delete test fail; restoring `RESTRICT` makes it pass.
+- Both migrations apply cleanly to an empty database. Tests leave no rows behind, and the development database is untouched.
+### Code review fixes (PR #2)
+
+- **Missing lifecycle states.** Added `EXPIRED` to orders and `CANCELED` to payments (migration `order_expired_payment_canceled`).
+- **No rule against bad amounts.** Hand-written migration `positive_amount_checks` adds `CHECK (amount > 0)` to orders, payments and refunds. Prisma ignores CHECK constraints: a probe migration created afterwards came out empty, so Prisma won't try to drop them. Checked: dropping `payments_amount_positive` in the test database makes the amount tests fail; restoring it makes them pass.
+- **A test that depended on another.** The duplicate-event test now inserts its own first row and passes when run alone.
+- **Test-database guard compared only names.** It now compares host, port and name, and refuses a test database on another machine unless `ALLOW_REMOTE_TEST_DATABASE=true`.
+- **Test clients had no connection timeout.** Both database test files now use one `createTestPrisma()` helper with the same 5-second timeout as `PrismaService`.
+- **Slow test setup.** The global setup runs the local Prisma CLI with `node` instead of `npx` through a shell. The e2e run went from about 18 to about 16 seconds.
+- **Not changed, documented instead:** 32-bit amounts (fine below about $21 million per row) and per-table currency (one currency only). See `INTERVIEW_PREP.md`, "known limits". No index on `stripe_events.status` yet: in this design the worker gets event IDs from queue jobs, not by scanning the table. Revisit in stage 5 if a query needs it.
+
+After the fixes: 23 unit tests and 10 e2e tests pass; build, lint and type check are clean.

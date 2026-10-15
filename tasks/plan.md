@@ -1,56 +1,91 @@
-# Implementation Plan: Stage 1 – Project Setup
+# Implementation Plan: Stage 2 – Data Model
 
 ## Overview
 
-Stage 1 lays the foundation for Stripe Payment Sync (see `PROJECT.md`). It produces a NestJS app that loads its settings from environment variables and refuses to start if one is missing. It talks to PostgreSQL through Prisma, and it runs against PostgreSQL and Redis started by Docker Compose. The stage is done when `docker compose up` brings up the databases and `GET /health` returns ok.
+Stage 2 adds the database tables the rest of the project writes to (see `PROJECT.md`, stage 2): Stripe events, orders, payments and refunds. It also adds a separate test database, so tests that insert and delete rows never touch development data.
 
-No business tables, Stripe calls or queues are built here. Those start in stage 2.
+**Done when (from `PROJECT.md`):** the migration runs and you can explain why the Stripe event ID is the primary key.
+
+No endpoints, Stripe calls or queue code are built here. Stage 3 creates orders, stage 4 stores events, and stage 5 fills in payments and refunds.
+
+Stage 1 plan and tasks are archived in `tasks/archive/`.
+
+## Data model
+
+```
+stripe_events                     orders
+  id  (Stripe evt_..., PK)          id (uuid, PK)
+  type                              status
+  payload (jsonb)                   amount, currency
+  status, attempts, last_error      customer_email
+  stripe_created_at                 stripe_checkout_session_id (unique)
+  received_at, processed_at         created_at, updated_at
+                                        │ 1
+                                        │
+                                        │ many
+                                    payments
+                                      id (uuid, PK)
+                                      order_id (FK)
+                                      stripe_payment_intent_id (unique)
+                                      amount, currency, status
+                                      created_at, updated_at
+                                        │ 1
+                                        │
+                                        │ many
+                                    refunds
+                                      id (uuid, PK)
+                                      payment_id (FK)
+                                      stripe_refund_id (unique)
+                                      amount, currency, status
+                                      created_at, updated_at
+```
+
+`stripe_events` has no foreign keys. It is the inbox: an event is stored first, before anything knows which order it belongs to.
 
 ## Architecture Decisions
 
-- **Vitest instead of Jest.** NestJS 12 scaffolds Vitest by default; `PROJECT.md` lists Jest. Kept Vitest: same `describe`/`it`/`expect` API, faster, and no fight with the framework's ESM setup.
-- **Ports 5435 and 6380 on the host.** The job-tracker project already uses 5432 and 6379. Both are bound to 127.0.0.1 only.
-- **npm as package manager.** It ships with Node 22, so there is nothing extra to install or explain.
-- **Docker Compose runs only PostgreSQL and Redis in stage 1.** The API runs on the host with `npm run start:dev` for fast reloads. The API and worker containers are added later, before the final "runs with one command" check in stage 8.
-- **Config validation with `@nestjs/config` and a schema.** The schema validates `DATABASE_URL`, `REDIS_URL`, `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` at startup. A missing value stops the app before it serves any request, which is easier to debug than a crash at the first Stripe call.
-- **Prisma wrapped in a `PrismaService`.** One shared client, connected when the module starts and closed on shutdown. Check the current Prisma major version's setup in the official docs before writing it, because recent versions changed the generator and config files.
-- **Health endpoint pings the database.** `GET /health` runs `SELECT 1` through Prisma. It returns 200 when the database answers and 503 when it does not, so it proves the Prisma wiring and not only that the server is up. A Redis check joins it in stage 4, when the app first connects to Redis.
-- **Secrets never committed.** `.env` is git-ignored. `.env.example` lists every variable with placeholder values.
+- **Stripe event ID is the primary key of `stripe_events`.** Stripe can send the same event more than once. A second insert with the same ID fails with a unique-constraint error (Prisma `P2002`), so the database itself guarantees each event is stored once, even when two copies arrive at the same moment. A check like "does it exist? then insert" in application code cannot guarantee that, because both requests can pass the check before either inserts.
+- **Every Stripe object ID is unique in its table** (`stripe_checkout_session_id`, `stripe_payment_intent_id`, `stripe_refund_id`). The worker in stage 5 can then use upserts, so processing the same event twice updates a row instead of creating a duplicate.
+- **Money is stored as integers in the smallest currency unit** (cents), never as floats. This matches Stripe's API and avoids rounding errors like `0.1 + 0.2 = 0.30000000000000004`.
+- **Currency is stored even though the project uses one currency.** Stripe returns it on every object, it costs one column, and an amount without a currency is ambiguous.
+- **Internal IDs are UUIDs**, generated by the database. They don't reveal how many orders exist, unlike 1, 2, 3.
+- **An order can have many payments.** A customer can fail a card payment, then succeed with another, and both attempts are worth keeping.
+- **Foreign keys use `onDelete: Restrict`.** Payment records must never disappear because someone deleted an order.
+- **Status columns are PostgreSQL enums** (for example `PENDING`, `PROCESSED`, `FAILED` for events), so an invalid status cannot be saved.
+- **Snake_case table and column names** in PostgreSQL (`@@map`/`@map`), camelCase in TypeScript. This is the usual convention on each side, and it makes raw SQL and `psql` easier to read.
+- **Separate test database `payments_test`** in the same PostgreSQL container. A Vitest global setup runs `prisma migrate deploy` against it before the database tests, and the tests clean their own rows. Development data in `payments` is never touched.
 
 ## Task List
 
 Tasks are tracked in `tasks/todo.md`.
 
-### Phase 1: Running skeleton
-- [x] Task 1: Scaffold the NestJS app
-- [x] Task 2: Docker Compose for PostgreSQL and Redis
-- [x] Task 3: Validated config module
+### Phase 1: Test database and event store
+- [x] Task 1: Test database setup
+- [x] Task 2: `StripeEvent` model, first migration and duplicate-event test
 
-### Checkpoint: Skeleton
-- [x] App starts with a full `.env` and stops with a clear error when a variable is missing
-- [x] Containers report healthy
+### Checkpoint: Event store
+- [x] Migration runs against both databases
+- [x] Duplicate-event test passes and fails when the primary key is removed
 
-### Phase 2: Database and health
-- [x] Task 4: Prisma setup and `PrismaService`
-- [x] Task 5: Health endpoint
-- [x] Task 6: Docs and stage 1 commit
+### Phase 2: Orders, payments and refunds
+- [x] Task 3: `Order`, `Payment` and `Refund` models, second migration and relationship tests
+- [x] Task 4: Docs and pull request
 
-### Checkpoint: Stage 1 complete
-- [x] `docker compose up -d`, then `npm run start:dev`, then `GET /health` returns 200 `{ "status": "ok" }`
-- [x] All tests pass and `npm run build` succeeds
-- [ ] Human review before stage 2
+### Checkpoint: Stage 2 complete
+- [x] `npx prisma migrate deploy` runs on a fresh database
+- [x] All tests pass, build and lint clean
+- [ ] PR opened; human review and merge before stage 3
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Stripe CLI not installed | Low now, high at stage 4 | Install before stage 4 (`winget install Stripe.StripeCLI` or `scoop install stripe`) |
-| A local PostgreSQL or Redis already uses port 5432 or 6379 | Medium | Map host ports through `.env` (e.g. `POSTGRES_PORT`) so a clash is a one-line change |
-| Docker Desktop not running | Low | Compose fails fast with a clear error; start Docker Desktop first |
-| Prisma setup changed between major versions | Medium | Follow the official Prisma + NestJS guide for the installed version, not memory |
-| Windows CRLF line endings break shell scripts in containers | Low | Add `.gitattributes` with `* text=auto eol=lf` in Task 1 |
-| `postinstall` runs `prisma generate`, but `prisma` and `dotenv` are dev dependencies (PR #1 review) | Low now, high at stage 8 | `npm ci --omit=dev` in a production image would fail. When writing the Dockerfile, run `prisma generate` in the build stage and skip postinstall in the runtime stage, or move both packages to dependencies |
+| Database tests delete development data | High | Separate `payments_test` database; the test setup refuses to run if the test URL equals `DATABASE_URL` |
+| `prisma migrate deploy` may not create a missing database | Low | The setup creates `payments_test` itself if it is missing; verify on a fresh volume |
+| Tests running in parallel interfere with each other's rows | Medium | Database test files run one after another (`fileParallelism: false` in the e2e config) and use unique IDs per test |
+| Schema decisions are hard to change once data exists | Medium | Nothing is in production yet; this PR is the cheap place to change them, so review the data model first |
+| `postinstall` vs `npm ci --omit=dev` (from PR #1 review) | Low now, high at stage 8 | Unchanged; still planned for the Dockerfile in stage 8 |
 
 ## Open Questions
 
-- None blocking. The API and worker containers are deferred to a later stage; say so now if you want them in stage 1 instead.
+- **Order details.** The plan stores amount, currency and customer email on an order, and no course or product reference, because courses are out of scope. Stage 3 can add a `product_name` column if the checkout page needs one. Say now if you want it from the start.

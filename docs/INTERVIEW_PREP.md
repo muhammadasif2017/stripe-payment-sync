@@ -42,3 +42,47 @@ The error can contain hostnames, ports or other internal details. Those go to th
 
 **Why are PostgreSQL and Redis bound to `127.0.0.1`?**
 Docker publishes ports on every network interface by default. On a laptop on public Wi-Fi, that can expose the database to the network. Binding to `127.0.0.1` means only this machine can connect.
+
+## Stage 2: Data model
+
+**How do you stop a payment from being recorded twice?** (the client brief asks this directly)
+At two levels. First, every Stripe event is stored with Stripe's event ID as the primary key. If Stripe delivers the same event twice, the second insert fails with a unique-constraint error (Prisma code `P2002`), and the event is processed only once. Second, every Stripe object ID is unique in its table: checkout session on `orders`, payment intent on `payments`, refund on `refunds`. Even if the same object arrives in two different events, the worker (stage 5) will upsert on that ID, so it updates one row instead of adding a second.
+
+**Why not just check "does this event exist?" before inserting?**
+Because two copies can arrive at the same moment. Both requests run the check, both see nothing, and both insert. A primary key or unique index is enforced inside the database, which handles concurrent inserts correctly: exactly one wins and the other gets an error. The test proves it, and it fails if the primary key is removed.
+
+**Why store money as integers?**
+Floating-point numbers can't represent most decimal fractions exactly: `0.1 + 0.2` is `0.30000000000000004` in JavaScript. With amounts in cents as integers, $49.99 is exactly `4999`. Stripe's API uses the same convention, so values are copied across with no conversion.
+
+**Why store the currency if there is only one?**
+An amount without a currency is ambiguous, and Stripe sends it on every object anyway. It costs one three-character column, and supporting more currencies later doesn't need a migration of existing rows.
+
+**Why `ON DELETE RESTRICT` instead of `CASCADE`?**
+Payment and refund records are financial history. With `CASCADE`, deleting an order would silently delete its payments too. `RESTRICT` makes the database refuse (Prisma code `P2003`), so removing payment data has to be a deliberate act.
+
+**Why UUIDs for internal IDs?**
+Sequential IDs like 1, 2, 3 reveal how many orders exist and make other orders easy to guess in a URL. PostgreSQL generates the UUIDs (`gen_random_uuid()`), so every way of inserting a row gets one.
+
+**Why can an order have several payments?**
+A customer's first card can be declined and a second one succeed. Keeping both attempts shows what happened, which matters when a customer asks why they see a failed charge.
+
+**Why add indexes on `order_id` and `payment_id`?**
+PostgreSQL indexes primary keys and unique columns automatically, but not foreign keys. Without the index, "all payments of this order" scans the whole payments table.
+
+**Why a separate test database?**
+The tests insert and delete rows. Run against the development database, a cleanup step could wipe data you were using. A guard refuses to start the tests if both URLs reach the same database (same host, port and name), or if the test database is on another machine without `ALLOW_REMOTE_TEST_DATABASE=true`, so a typo cannot aim the tests at a shared server.
+
+**How do you know the constraint tests actually test the constraint?**
+They were broken on purpose in the test database: dropping the primary key made the duplicate-event test fail, and switching the foreign key to `CASCADE` made the delete test fail. A test that still passes when the thing it checks is removed proves nothing.
+**Why add CHECK constraints when the app validates amounts anyway?**
+The app is not the only thing that writes rows: a bug in one handler, a script or a manual fix in `psql` can all skip the app's checks. `CHECK (amount > 0)` on orders, payments and refunds makes PostgreSQL refuse a zero or negative amount from any source. Prisma can't describe CHECK constraints in its schema, so they are in a hand-written migration, and Prisma ignores them when it compares the schema with the database.
+
+**Why not also stop refunds from adding up to more than the payment in the database?**
+That rule spans several rows, and a CHECK constraint can only see one row. It needs a trigger, which is harder to test and to change. The worker will check it before it saves a refund (stage 5), and reconciliation compares totals with Stripe.
+
+**Which order and payment states are covered?**
+Orders: `PENDING`, `PAID`, `PAYMENT_FAILED`, `PARTIALLY_REFUNDED`, `REFUNDED`, and `EXPIRED` for a checkout session that ran out (`checkout.session.expired`). Payments: `SUCCEEDED`, `FAILED`, and `CANCELED` (`payment_intent.canceled`). Delayed payment methods such as bank debits, which sit in a "processing" state for days, are not covered because the project is card-only. Supporting them means adding a `PROCESSING` payment status.
+
+**What are the known limits of this data model?**
+- **Amount size:** amounts are 32-bit integers, so the largest is 2,147,483,647 cents (about $21 million) per row. Stripe allows larger amounts in some currencies, such as IDR. The fix is `BigInt`, at the cost of a JavaScript `bigint` type that can't go into JSON directly. Not needed for course sales in one currency.
+- **Currency consistency:** each table stores its own currency, and nothing makes a payment's currency match its order's. With one currency this can't go wrong in practice. Supporting several would need the worker to check it, or the currency to come from the parent row.
