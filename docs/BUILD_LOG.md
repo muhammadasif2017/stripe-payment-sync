@@ -72,3 +72,25 @@ One entry per stage: what was built, what went wrong, and what was decided.
 - **Not changed, documented instead:** 32-bit amounts (fine below about $21 million per row) and per-table currency (one currency only). See `INTERVIEW_PREP.md`, "known limits". No index on `stripe_events.status` yet: in this design the worker gets event IDs from queue jobs, not by scanning the table. Revisit in stage 5 if a query needs it.
 
 After the fixes: 23 unit tests and 10 e2e tests pass; build, lint and type check are clean.
+## Tooling: commit guard hook (2026-10-15)
+
+### What was built
+
+- `.claude/settings.json` registers a `PreToolUse` hook for the AI coding assistant. Before the assistant runs any shell command, `.claude/hooks/commit-guard.mjs` checks it. For `git commit` it blocks the command when the message names the assistant (including attribution or `Co-Authored-By` lines), when a `.env` file other than `.env.example` would be committed, or when lint, type check or unit tests fail.
+- `.gitignore` now ignores only `.claude/skills/` (downloaded by `prisma init`) and the personal files `.claude/settings.local.json` and `CLAUDE.local.md`, so the shared settings and the hook are committed.
+- `test/commit-guard.spec.ts`: 12 unit tests for the rules.
+
+### Why
+
+The same rules were already in `CLAUDE.md`, but an instruction file is advice the assistant can forget. A hook runs every time. The official Claude Code guidance says to use hooks for "actions that must happen every time with zero exceptions".
+
+### Problems and fixes
+
+- **e2e tests and build are not in the hook.** Together with lint, type check and unit tests they would take about a minute on every commit, and e2e needs Docker running. The hook runs the fast checks (about 25 seconds). e2e and build stay a written rule in `CLAUDE.md`.
+- **False alarms on file names.** The project has files called `CLAUDE.md` and `.claude/settings.json`, so the hook removes those names before it looks for the word.
+
+### Verified
+
+- `npm test`: 35 unit tests pass. Lint and type check are clean.
+- Turning off the word check and the `.env` check makes 8 of the 12 hook tests fail; restoring them makes all pass.
+- Run by hand with sample input: a normal command passes (exit 0); a commit naming the assistant is blocked (exit 2); a commit with a type error in `src/` is blocked with the `tsc` error shown; a clean commit passes after the checks.
