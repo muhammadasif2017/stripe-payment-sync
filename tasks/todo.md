@@ -49,15 +49,15 @@
 **Description:** After the signature check, save the event and add one job, then answer 200.
 
 **Acceptance criteria:**
-- [ ] Handled types (decision 1) are stored with `id`, `type`, `payload`, `stripeCreatedAt`, status `PENDING`; other types get 200 and are not stored
-- [ ] Job `{ eventId }` with `jobId = event.id`
-- [ ] A duplicate delivery returns 200 and leaves 1 row and 1 job
-- [ ] If the insert or the enqueue fails: 500 (Stripe retries); a retry after a failed enqueue adds the job
+- [x] Handled types (decision 1) are stored with `id`, `type`, `payload`, `stripeCreatedAt`, status `PENDING`; other types get 200 and are not stored
+- [x] Job `{ eventId }` with `jobId = event.id`
+- [x] A duplicate delivery returns 200 and leaves 1 row and 1 job
+- [x] If the insert or the enqueue fails: 500 (Stripe retries); a retry after a failed enqueue adds the job
 
 **Verification:**
-- [ ] e2e: valid event gives 1 row + 1 job; same event twice gives 1 + 1; unhandled type gives 0 + 0; enqueue failure gives 500 and a later redelivery gives 1 + 1
-- [ ] Unit tests for the service's duplicate and failure paths
-- [ ] Prove a test can fail (e.g. drop the job ID)
+- [x] e2e: valid event gives 1 row + 1 job; same event twice gives 1 + 1; unhandled type gives 0 + 0; enqueue failure gives 500 and a later redelivery gives 1 + 1
+- [x] Unit tests for the service's duplicate and failure paths
+- [x] Prove a test can fail (e.g. drop the job ID)
 
 **Dependencies:** Task 2
 
@@ -66,7 +66,7 @@
 **Estimated scope:** Medium
 
 ## Checkpoint: Endpoint complete
-- [ ] Tasks 1–3 verified, all five checks pass, commit
+- [x] Tasks 1–3 verified, all five checks pass, commit
 
 ## Task 4: Real Stripe check, docs and pull request
 

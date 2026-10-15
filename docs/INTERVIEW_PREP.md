@@ -151,3 +151,12 @@ The HMAC covers the bytes Stripe sent. If the framework parses the JSON and the 
 
 **What stops someone replaying a real, captured webhook?**
 The signed timestamp. `constructEvent` refuses signatures older than 5 minutes, so an old request fails even though its signature was once valid. Inside those 5 minutes a replay would be the same event ID, which the database stores only once.
+
+**What happens if the database or Redis fails in the middle of a webhook?**
+Each step is safe to repeat, so any failure is answered with 500 and Stripe's retry finishes the job. If the insert fails, nothing was saved and the redelivery inserts it. If the insert worked but queuing failed, the redelivery hits the primary key (treated as "already stored") and queues the job. If both worked but the 200 got lost, the redelivery changes nothing: same row, and BullMQ ignores the existing job ID. Stripe retries for up to 3 days.
+
+**Why answer 200 to event types you don't handle?**
+A non-2xx answer tells Stripe the delivery failed, so it would keep resending an event the system will never use. Answering 200 without saving it stops the retries and keeps `stripe_events` to the events that matter.
+
+**Why does the webhook not update the order itself?**
+Processing needs Stripe API calls and several database writes, which can be slow or fail. Stripe expects an answer within seconds and retries on a timeout, which would create duplicate work. The webhook only records the event; the worker (stage 5) does the work with its own retries, and the endpoint stays fast whatever happens downstream.

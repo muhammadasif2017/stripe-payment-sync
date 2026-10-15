@@ -8,17 +8,19 @@ export class WebhooksController {
   constructor(private readonly webhooks: WebhooksService) {}
 
   /**
-   * Accepts one Stripe event after checking its signature.
+   * Accepts one Stripe event: checks its signature, stores it and queues it, nothing more.
    * Answers as fast as possible: Stripe treats a slow or failed answer as a failed delivery and retries.
-   * @returns 200 `{ received: true }`; 400 when the signature check fails.
+   * @returns 200 `{ received: true }`, also for duplicates and ignored types; 400 when the signature
+   *   check fails; 500 when the event couldn't be stored or queued, so Stripe sends it again.
    */
   @Post('stripe')
   @HttpCode(200)
-  receive(
+  async receive(
     @Req() req: RawBodyRequest<Request>,
     @Headers('stripe-signature') signature: string | undefined,
-  ): { received: true } {
-    this.webhooks.verifyEvent(req.rawBody, signature);
+  ): Promise<{ received: true }> {
+    const event = this.webhooks.verifyEvent(req.rawBody, signature);
+    await this.webhooks.recordEvent(event);
     return { received: true };
   }
 }
