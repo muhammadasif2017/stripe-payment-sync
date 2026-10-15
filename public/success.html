@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Payment received (sample)</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+      footer { margin-top: 2rem; font-size: 0.85rem; color: #666; }
+    </style>
+  </head>
+  <body>
+    <h1>Thank you, your payment is being confirmed</h1>
+    <p>
+      Stripe is confirming the payment with our server. Your course access is activated as soon as
+      that confirmation arrives, usually within a few seconds. You can close this page.
+    </p>
+    <p><a href="/">Back to the courses</a></p>
+    <footer>Sample project: Stripe test mode only, no real money.</footer>
+    <!--
+      This page deliberately changes nothing. Customers can close the tab before it loads, so it can't
+      be what marks an order paid: Stripe's webhook does that (stages 4 and 5).
+    -->
+  </body>
+</html>

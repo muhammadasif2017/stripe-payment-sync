@@ -125,3 +125,9 @@ Stripe's error text can include details about the account or the API key. The cl
 
 **Why only card payments?**
 Some payment methods, such as bank debits, stay "processing" for days. The data model has no state for that yet, so the session uses `allowed_payment_method_types: ['card']`, where the result is known in seconds.
+
+**What does the success page do, and why so little?**
+It thanks the customer and says the payment is being confirmed. It changes nothing in the database. That was the client's original bug: their backend marked orders paid when the customer reached the success page, so a customer who closed the tab early paid but never got the course. Stripe's webhook arrives whether or not the browser does, so only the webhook (stages 4 and 5) marks an order paid.
+
+**Why does the page load the course list from the API?**
+So prices are written in one place, the server's catalog. A price copied into the HTML could drift from the one charged, and the page would show one amount while Stripe charged another.

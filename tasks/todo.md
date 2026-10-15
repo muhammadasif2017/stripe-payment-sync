@@ -66,11 +66,11 @@
 **Description:** `public/index.html` lists the courses with a "Buy" button that calls `POST /checkout` and redirects to Stripe. `success.html` says the payment is being confirmed; `cancel.html` offers to try again. Neither page changes the database.
 
 **Acceptance criteria:**
-- [ ] Pages served from `public/` by NestJS
-- [ ] Success page makes no API call that changes the order
+- [x] Pages served from `public/` by NestJS
+- [x] Success page makes no API call that changes the order
 
 **Verification:**
-- [ ] e2e: `GET /` and `GET /success.html` return 200 HTML; the order stays `PENDING` after loading the success page
+- [x] e2e: `GET /` and `GET /success.html` return 200 HTML; the order stays `PENDING` after loading the success page
 
 **Dependencies:** Task 3 (needs decision 2)
 
@@ -79,7 +79,7 @@
 **Estimated scope:** Small
 
 ## Checkpoint: Endpoint and pages
-- [ ] Tasks 3–4 verified, all five checks pass, commit
+- [x] Tasks 3–4 verified, all five checks pass, commit
 
 ## Task 5: Real test payment, docs and pull request
 
