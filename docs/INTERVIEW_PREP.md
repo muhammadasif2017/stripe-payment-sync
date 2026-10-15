@@ -86,3 +86,13 @@ Orders: `PENDING`, `PAID`, `PAYMENT_FAILED`, `PARTIALLY_REFUNDED`, `REFUNDED`, a
 **What are the known limits of this data model?**
 - **Amount size:** amounts are 32-bit integers, so the largest is 2,147,483,647 cents (about $21 million) per row. Stripe allows larger amounts in some currencies, such as IDR. The fix is `BigInt`, at the cost of a JavaScript `bigint` type that can't go into JSON directly. Not needed for course sales in one currency.
 - **Currency consistency:** each table stores its own currency, and nothing makes a payment's currency match its order's. With one currency this can't go wrong in practice. Supporting several would need the worker to check it, or the currency to come from the parent row.
+## Tooling: working with an AI coding assistant
+
+**How do you make sure an AI assistant follows the project's rules?**
+Two layers. `CLAUDE.md` holds the rules and context the assistant reads at the start of every session: commands, conventions, boundaries. For the rules that must never be broken, a hook enforces them. Before every `git commit`, a script blocks the commit if the message names the assistant, if a `.env` file is included, or if lint, type check or unit tests fail. Instructions can be forgotten in a long session; a script that exits with an error cannot.
+
+**Why not run every check in the hook?**
+Speed. Lint, type check and unit tests take about 25 seconds. Adding the e2e tests (which need Docker) and the build would make every commit take about a minute. Those two stay a written rule, and the PR review catches what slips through.
+
+**How do you know the hook works?**
+It has unit tests, and they were proven to fail when the checks were switched off. It was also run by hand: a commit with a type error was blocked and showed the `tsc` error.
