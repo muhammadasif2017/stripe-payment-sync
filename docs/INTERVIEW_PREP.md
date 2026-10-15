@@ -96,3 +96,41 @@ Speed. Lint, type check and unit tests take about 25 seconds. Adding the e2e tes
 
 **How do you know the hook works?**
 It has unit tests, and they were proven to fail when the checks were switched off. It was also run by hand: a commit with a type error was blocked and showed the `tsc` error.
+
+## Stage 3: Test checkout
+
+**Why pin the Stripe library to an exact version?**
+Each major version of `stripe` moves to a newer Stripe API version, and API versions can change the shape of responses. With `^23.0.0`, a fresh install could pick up different code than the tests ran against. The exact version, plus a unit test that compares the API version in the code with the library's, makes every upgrade a deliberate change.
+
+**Why change the Stripe client's retries and timeout?**
+The library's default timeout is 80 seconds, which is far too long for a customer waiting for the payment page. 20 seconds fails faster, and 2 automatic retries cover short network blips. Retries are safe because the library sends an idempotency key, so Stripe treats a retried request as the same request instead of creating a second session.
+
+**Why is the price in the server's catalog and not in the request?**
+Anything the browser sends can be edited. If the request carried the amount, anyone could open the developer tools and buy a course for 1 cent. The request carries only a course ID; the server looks up the name and price and sends those to Stripe.
+
+**Why store `course_id` on the order?**
+Without it, the database knows that 49 dollars were paid but not what for: the client couldn't grant access to the right course or report sales per course, which was one of their complaints.
+
+**Why create the order before the Checkout Session?**
+The session's metadata must carry the order ID, so the order has to exist first. The database insert and the call to Stripe can't share a transaction. If Stripe fails, the order stays `PENDING` with no session ID: no money moved, and the row records the attempt. The customer gets a generic 502 and can try again.
+
+**What if saving the session ID fails after Stripe created the session?**
+The request fails with a 500, so the customer never receives the payment page URL and nobody can pay that session. Stripe expires unused sessions after 24 hours. If it were paid somehow, its metadata still carries the order ID, so the webhook (stage 5) can find the order without the saved session ID.
+
+**Why use the order ID as the idempotency key?**
+If the request to Stripe times out after Stripe created the session, a retry with the same key returns that same session instead of creating a second one. One order can then never have two payment pages that could both be paid.
+
+**Why put the order ID in two metadata places?**
+Stripe doesn't copy a Checkout Session's metadata to the PaymentIntent it creates (Stripe's metadata docs say so). Some events, like `payment_intent.payment_failed`, carry only the PaymentIntent. `payment_intent_data.metadata` puts the order ID there too, so the worker in stage 5 can find the order from either event.
+
+**Why return 502 and not the Stripe error?**
+Stripe's error text can include details about the account or the API key. The client only needs to know that the payment provider failed and that it can retry. The full error, with Stripe's request ID for their support team, goes to the server log.
+
+**Why only card payments?**
+Some payment methods, such as bank debits, stay "processing" for days. The data model has no state for that yet, so the session uses `allowed_payment_method_types: ['card']`, where the result is known in seconds.
+
+**What does the success page do, and why so little?**
+It thanks the customer and says the payment is being confirmed. It changes nothing in the database. That was the client's original bug: their backend marked orders paid when the customer reached the success page, so a customer who closed the tab early paid but never got the course. Stripe's webhook arrives whether or not the browser does, so only the webhook (stages 4 and 5) marks an order paid.
+
+**Why does the page load the course list from the API?**
+So prices are written in one place, the server's catalog. A price copied into the HTML could drift from the one charged, and the page would show one amount while Stripe charged another.

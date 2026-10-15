@@ -80,6 +80,8 @@ model Order {
   amount                  Int
   /// Three-letter ISO code in lowercase, as Stripe sends it (e.g. usd).
   currency                String      @db.Char(3)
+  /// Course bought, from the catalog in src/checkout/catalog.ts. Needed to grant access and report sales per course.
+  courseId                String      @map("course_id")
   customerEmail           String?     @map("customer_email")
   /// Unique so a repeated checkout.session.completed event finds the same order.
   stripeCheckoutSessionId String?     @unique @map("stripe_checkout_session_id")

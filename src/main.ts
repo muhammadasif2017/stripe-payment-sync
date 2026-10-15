@@ -1,10 +1,13 @@
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module.js';
+import { serveCheckoutPages } from './app.setup.js';
 import type { Env } from './config/env.validation.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  serveCheckoutPages(app);
   // Runs onModuleDestroy hooks (e.g. closing the database pool) on SIGTERM/SIGINT.
   app.enableShutdownHooks();
   const config = app.get(ConfigService<Env, true>);

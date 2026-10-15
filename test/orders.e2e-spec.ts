@@ -13,6 +13,7 @@ describe('orders, payments and refunds tables (e2e)', () => {
     const order = await prisma.order.create({
       data: {
         status: 'PAID',
+        courseId: 'nestjs-fundamentals',
         amount: 4999,
         currency: 'usd',
         customerEmail: 'buyer@example.com',
@@ -65,7 +66,9 @@ describe('orders, payments and refunds tables (e2e)', () => {
   });
 
   it('defaults a new order to PENDING', async () => {
-    const order = await prisma.order.create({ data: { amount: 2500, currency: 'usd' } });
+    const order = await prisma.order.create({
+      data: { courseId: 'nestjs-fundamentals', amount: 2500, currency: 'usd' },
+    });
     orderIds.push(order.id);
 
     expect(order.status).toBe('PENDING');
@@ -112,7 +115,7 @@ describe('orders, payments and refunds tables (e2e)', () => {
     const paymentId = order.payments[0].id;
 
     const orderAttempt = await prisma.order
-      .create({ data: { amount, currency: 'usd' } })
+      .create({ data: { courseId: 'nestjs-fundamentals', amount, currency: 'usd' } })
       .catch((e: unknown) => e);
     // If the row slipped through, record it for cleanup before the assertion fails the test.
     // (Payments and refunds below belong to `order`, which is already cleaned up.)

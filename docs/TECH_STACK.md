@@ -49,6 +49,14 @@ Statuses (event, order, payment, refund) are PostgreSQL enum types, so the datab
 ## Separate test database
 
 The e2e tests write to `payments_test` in the same PostgreSQL container, never to the development database. A Vitest global setup creates it and runs `prisma migrate deploy` before the tests, so it always has the current schema.
+
+## Stripe Node.js library (`stripe` 23.0.0)
+
+The official library, as the brief asks. It handles authentication, retries network errors with an idempotency key, and has TypeScript types for every request, so a misspelt parameter fails the build instead of a live request. The version is pinned exactly because each major version moves to a new Stripe API version (`2026-09-30.endive` here), and a unit test fails if an upgrade changes it. The client is one NestJS provider (`STRIPE_CLIENT`), so tests swap in a fake and never call Stripe.
+## class-validator and ValidationPipe
+
+NestJS's standard way to check request bodies: decorators on a DTO class (`@IsString()`, `@IsEmail()`) and one global `ValidationPipe`. With `whitelist` and `forbidNonWhitelisted`, a body with a field the DTO doesn't declare fails with 400, which is how a client-sent `amount` is refused. `class-transformer` is required by the pipe to turn the JSON into a DTO instance.
+
 ## Claude Code hooks
 
 The AI coding assistant reads `CLAUDE.md` at the start of each session, but those rules are only advice. A hook is a script the tool runs at fixed points, here before every shell command, and it can block the command. `.claude/hooks/commit-guard.mjs` is plain Node.js with no dependencies, so it runs the same in Git Bash and PowerShell. It only affects the assistant; commits typed by a person go straight to git.

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Course checkout (sample)</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+      .course { display: flex; justify-content: space-between; align-items: center; border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin: 0.75rem 0; }
+      button { background: #635bff; color: #fff; border: 0; border-radius: 6px; padding: 0.6rem 1rem; font-size: 1rem; cursor: pointer; }
+      button:disabled { opacity: 0.6; cursor: wait; }
+      input { padding: 0.5rem; font-size: 1rem; width: 100%; box-sizing: border-box; }
+      .error { color: #b00020; }
+      footer { margin-top: 2rem; font-size: 0.85rem; color: #666; }
+    </style>
+  </head>
+  <body>
+    <h1>Buy a course</h1>
+    <label>Email (optional, prefilled on the payment page)
+      <input id="email" type="email" autocomplete="email" />
+    </label>
+    <div id="courses"><p>Loading courses…</p></div>
+    <p id="error" class="error" role="alert"></p>
+    <footer>
+      Sample project: Stripe test mode only, no real money. Pay with card 4242 4242 4242 4242, any
+      future expiry date and any CVC.
+    </footer>
+
+    <script>
+      const list = document.getElementById('courses');
+      const errorBox = document.getElementById('error');
+
+      function price(course) {
+        return new Intl.NumberFormat('en-US', { style: 'currency', currency: course.currency })
+          .format(course.amount / 100);
+      }
+
+      async function buy(course, button) {
+        errorBox.textContent = '';
+        button.disabled = true;
+        const email = document.getElementById('email').value.trim();
+        try {
+          const response = await fetch('/checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            // Only the course ID: the server decides the price.
+            body: JSON.stringify(email ? { courseId: course.id, email } : { courseId: course.id }),
+          });
+          const body = await response.json();
+          if (!response.ok) throw new Error([].concat(body.message || 'Checkout failed').join(', '));
+          window.location.href = body.checkoutUrl;
+        } catch (error) {
+          errorBox.textContent = error.message;
+          button.disabled = false;
+        }
+      }
+
+      fetch('/checkout/courses')
+        .then((response) => response.json())
+        .then((courses) => {
+          list.replaceChildren(
+            ...courses.map((course) => {
+              const row = document.createElement('div');
+              row.className = 'course';
+              const label = document.createElement('span');
+              // textContent, never innerHTML: course data is shown as text, not run as markup.
+              label.textContent = `${course.name} (${price(course)})`;
+              const button = document.createElement('button');
+              button.textContent = 'Buy';
+              button.addEventListener('click', () => buy(course, button));
+              row.append(label, button);
+              return row;
+            }),
+          );
+        })
+        .catch(() => {
+          list.textContent = 'Could not load the courses. Is the API running?';
+        });
+    </script>
+  </body>
+</html>

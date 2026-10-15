@@ -94,3 +94,31 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 - `npm test`: 35 unit tests pass. Lint and type check are clean.
 - Turning off the word check and the `.env` check makes 8 of the 12 hook tests fail; restoring them makes all pass.
 - Run by hand with sample input: a normal command passes (exit 0); a commit naming the assistant is blocked (exit 2); a commit with a type error in `src/` is blocked with the `tsc` error shown; a clean commit passes after the checks.
+
+## Stage 3: Test checkout (2026-10-15)
+
+### What was built
+
+- **Task 1: Stripe client and settings.** `stripe@23.0.0` installed with an exact version. `StripeModule` (global) provides one client under the `STRIPE_CLIENT` token, built from `STRIPE_SECRET_KEY`, with 2 network retries and a 20-second timeout. New setting `APP_URL` (http or https, no trailing slash) for Stripe's success and cancel redirects.
+- **Task 2: Course catalog and `course_id`.** `src/checkout/catalog.ts` holds two sample courses with their prices; `findCourse` uses a `Map`, so IDs like `__proto__` find nothing. Migration `order_course_id` adds a required `course_id` column to `orders`.
+- **Task 3: Checkout endpoint.** `POST /checkout` takes `{ courseId, email? }`, saves a `PENDING` order with the catalog price, creates a Checkout Session (card only, order ID in `metadata`, `payment_intent_data.metadata` and `client_reference_id`, idempotency key = order ID), saves the session ID on the order and returns `201 { orderId, checkoutUrl }`. A global `ValidationPipe` (`class-validator`) rejects unknown fields, such as `amount`, with 400. If Stripe fails, the client gets a generic 502 and the cause is logged with Stripe's error type and request ID.
+- **Task 4: Checkout pages.** `public/index.html` lists the courses from `GET /checkout/courses` (so prices exist only in the catalog) and sends `POST /checkout` with the course ID, then redirects to Stripe. `success.html` says the payment is being confirmed and changes nothing; `cancel.html` says nothing was charged. All three are labelled as a sample project in test mode. `serveCheckoutPages()` in `src/app.setup.ts` serves them with Express's static middleware.
+
+### Problems and fixes
+
+- **`npm audit` reports 9 vulnerabilities.** None come from `stripe`: they are in development tools (`prisma` pulls in `mysql2` and `deepmerge-ts`, `@nestjs/mau` pulls in `tmp` and `undici`) and were already there on `main`. Left as they are; `npm audit fix --force` would install breaking versions. Revisit in stage 8.
+- **A required column on an existing table.** Prisma warns that `ADD COLUMN course_id TEXT NOT NULL` fails if `orders` has rows. The development and test databases had none, so it applied cleanly. On a database with orders it would need a default or a backfill first.
+- **Prettier reformatted older files.** `.prettierrc` has no `printWidth`, so Prettier wraps at 80 columns while the existing code uses about 100. The formatting-only changes were reverted; only new files were formatted.
+- **`payment_method_types` no longer exists.** The type check failed on it: API version `2026-09-30.endive` removed it from Checkout Sessions (library changelog). Its replacement, `allowed_payment_method_types: ['card']`, filters the payment methods Stripe would offer.
+- **Validation in `main.ts` would skip the e2e tests.** They build the app from `AppModule`, not `main.ts`, so the `ValidationPipe` is registered in `AppModule` with the `APP_PIPE` token.
+- **`@nestjs/serve-static` did nothing in the e2e tests.** It picks its loader when the module is compiled, and `Test.createTestingModule().compile()` runs before the HTTP server exists, so it fell back to a no-op loader and every page returned 404. Its default also answers every unknown GET with `index.html`, hiding API 404s. Replaced with `app.useStaticAssets()` in a setup function that `main.ts` and the e2e test both call; the package was removed.
+
+### Verified
+
+- Task 1: 41 unit tests and 10 e2e tests pass; lint, type check and build are clean. Changing `STRIPE_API_VERSION` makes the version test fail.
+- Task 2: 48 unit tests and 10 e2e tests pass. Replacing the `Map` lookup with a plain-object lookup makes the `__proto__` and `constructor` tests fail.
+- Task 3: 54 unit tests and 16 e2e tests pass. Removing `payment_intent_data.metadata` and the idempotency key fails the unit test and the e2e happy path; turning off `forbidNonWhitelisted` fails the `amount` test.
+- Task 4: 54 unit tests and 21 e2e tests pass. Without the static setup the page tests fail with 404. The built app (`node dist/main.js`) serves `/`, `/success.html` and `/cancel.html` as HTML, `/checkout/courses` and `/health` as JSON, and `/nope` as a JSON 404. The Docker image in stage 8 must copy `public/`.
+- Real Stripe error path: with the placeholder key, `POST /checkout` against the real API returned the generic 502, the log line named `StripeAuthenticationError`, and the order stayed `PENDING` with no session ID (the row was deleted afterwards).
+- Task 5, real test payment: with a real test key, `POST /checkout` returned 201 both with and without an email. A payment with card 4242 on the checkout page completed: session `cs_test_a1cWrdOHy0iZnEGj3TvkAS7YxikGKEfasae9cB10useScpOWxeFsHNgevO` is `complete` and `paid` (4900 cents, test mode), PaymentIntent `pi_3UQsF1GImTS0y0Gh09xTY4HD` is `succeeded`. Retrieved from the Stripe API, `client_reference_id`, the session's `metadata.order_id` and the PaymentIntent's `metadata.order_id` all equal the order ID. The order is still `PENDING` in the database, as intended until stage 4.
+- Sessions that were never paid have no PaymentIntent yet: with this API version Stripe creates it when the customer pays, so `payment_intent_data.metadata` is applied at that moment.
