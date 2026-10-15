@@ -114,6 +114,9 @@ Without it, the database knows that 49 dollars were paid but not what for: the c
 **Why create the order before the Checkout Session?**
 The session's metadata must carry the order ID, so the order has to exist first. The database insert and the call to Stripe can't share a transaction. If Stripe fails, the order stays `PENDING` with no session ID: no money moved, and the row records the attempt. The customer gets a generic 502 and can try again.
 
+**What if saving the session ID fails after Stripe created the session?**
+The request fails with a 500, so the customer never receives the payment page URL and nobody can pay that session. Stripe expires unused sessions after 24 hours. If it were paid somehow, its metadata still carries the order ID, so the webhook (stage 5) can find the order without the saved session ID.
+
 **Why use the order ID as the idempotency key?**
 If the request to Stripe times out after Stripe created the session, a retry with the same key returns that same session instead of creating a second one. One order can then never have two payment pages that could both be paid.
 
