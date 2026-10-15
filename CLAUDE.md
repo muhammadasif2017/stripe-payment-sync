@@ -1,0 +1,57 @@
+# Stripe Payment Sync
+
+NestJS backend that receives Stripe webhooks, processes them through a BullMQ queue with retries, and keeps PostgreSQL in sync. Sample portfolio project, built in 8 stages.
+
+- Scope, acceptance criteria and stage plan: `PROJECT.md` (read the current stage's section, not the whole file)
+- Current stage plan and tasks: `tasks/plan.md`, `tasks/todo.md`; finished stages in `tasks/archive/`
+- Why each decision was made: `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md`
+
+## Stack
+
+NestJS 12 (ES modules), TypeScript strict, Prisma 7.10.0 with `@prisma/adapter-pg`, PostgreSQL 17, Redis 7, Vitest, oxlint, Docker Compose. Node 22.
+
+## Commands
+
+- Start databases: `docker compose up -d` (PostgreSQL on 5435, Redis on 6380, both 127.0.0.1 only)
+- Dev server: `npm run start:dev`
+- Unit tests: `npm test`
+- e2e tests: `npm run test:e2e` (needs the databases; runs against `payments_test`)
+- Lint / types / build: `npm run lint`, `npm run typecheck`, `npm run build`
+- New migration after a schema change: `npm run db:migrate` (Prisma 7 does not regenerate the client on its own)
+
+Run all five checks (unit, e2e, lint, typecheck, build) before every commit.
+
+## Code conventions
+
+- Relative imports end in `.js` (`./prisma.service.js`), including `supertest/types.js`: `nodenext` ESM requires it.
+- Read settings through `ConfigService<Env, true>`, never `process.env`. New variables go in `src/config/env.validation.ts` and `.env.example`.
+- JSDoc on every exported function, class and method. Inline comments explain why, not what.
+- Prisma client is generated to `src/generated/prisma` (git-ignored); import from `../generated/prisma/client.js`.
+- Schema: camelCase in TypeScript, snake_case in PostgreSQL via `@map`/`@@map`. Money is `Int` in cents. Timestamps are `@db.Timestamptz(3)`. Every Stripe ID column is `@unique`. Foreign keys use `onDelete: Restrict`.
+- CHECK constraints cannot be expressed in `schema.prisma`; add them in a hand-written migration (`prisma migrate dev --create-only`).
+- Errors returned to clients never include internal details; log the cause server-side.
+
+## Tests
+
+- Database tests use `createTestPrisma()` from `test/test-prisma.ts` and clean up only the rows they created, using IDs unique per run.
+- Each test must pass when run alone.
+- Prove a new test can fail: break the code or the constraint (in `payments_test` only), watch it fail, restore it.
+
+## Workflow
+
+- One branch and one PR per stage (`stage-N-short-name`). Plan first in `tasks/`, get approval, then build task by task with a commit per task. The user reviews and merges; never merge without being asked.
+- Commit messages: one short line, no body, and never mention Claude, Claude Code or Anthropic (no attribution or co-author lines).
+- After each task, update `docs/BUILD_LOG.md`, `docs/TECH_STACK.md` and `docs/INTERVIEW_PREP.md` in plain language; the user is preparing for interviews about this code.
+
+## Boundaries
+
+- Stripe test mode only. Never commit `.env` or any real key.
+- Never run `prisma migrate reset` or drop tables on the `payments` database without the user's explicit consent.
+- Ports 5432 and 6379 belong to another project's containers; don't stop or change them.
+- Out of scope (from `PROJECT.md`): front end beyond a minimal checkout page, live mode, subscriptions, multiple currencies.
+
+## Gotchas
+
+- Windows PowerShell 5.1 drops empty arguments: `gh pr merge --body ""` fails. Pass real text.
+- npm's `latest` tag for Prisma points at an 8.x release candidate; stay on 7.10.0.
+- `prisma init` downloads agent skill folders (`.agents/`, `.claude/`, `.windsurf/`); they are git-ignored, not part of the project.
