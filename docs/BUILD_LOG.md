@@ -122,3 +122,13 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 - Real Stripe error path: with the placeholder key, `POST /checkout` against the real API returned the generic 502, the log line named `StripeAuthenticationError`, and the order stayed `PENDING` with no session ID (the row was deleted afterwards).
 - Task 5, real test payment: with a real test key, `POST /checkout` returned 201 both with and without an email. A payment with card 4242 on the checkout page completed: session `cs_test_a1cWrdOHy0iZnEGj3TvkAS7YxikGKEfasae9cB10useScpOWxeFsHNgevO` is `complete` and `paid` (4900 cents, test mode), PaymentIntent `pi_3UQsF1GImTS0y0Gh09xTY4HD` is `succeeded`. Retrieved from the Stripe API, `client_reference_id`, the session's `metadata.order_id` and the PaymentIntent's `metadata.order_id` all equal the order ID. The order is still `PENDING` in the database, as intended until stage 4.
 - Sessions that were never paid have no PaymentIntent yet: with this API version Stripe creates it when the customer pays, so `payment_intent_data.metadata` is applied at that moment.
+
+## Stage 4: Webhook endpoint (2026-10-15)
+
+### What was built
+
+- **Task 1: Queue and test Redis.** `bullmq@6.3.10`, `@nestjs/bullmq@12.0.0` and `ioredis@6.0.0` (BullMQ 6 no longer bundles a Redis client). `QueueModule` connects to `REDIS_URL` and registers the `stripe-events` queue: 5 attempts with exponential backoff from 10 seconds, completed jobs kept 7 days, failed jobs kept. The producer connection doesn't buffer commands while Redis is down, so a webhook fails fast instead of hanging. The e2e tests use Redis database 1 (`TEST_REDIS_URL`), with the same guard as the test PostgreSQL database. `test/create-test-app.ts` builds the app with the same options as `main.ts` (`APP_OPTIONS`, now with `rawBody: true`) and the checkout pages.
+
+### Verified
+
+- Task 1: 61 unit tests and 23 e2e tests pass. Adding the same job ID twice leaves 1 job; adding the second without the job ID makes the test fail. The development Redis (database 0) stays empty after the tests.

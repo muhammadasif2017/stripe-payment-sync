@@ -134,3 +134,11 @@ It thanks the customer and says the payment is being confirmed. It changes nothi
 
 **Why does the page load the course list from the API?**
 So prices are written in one place, the server's catalog. A price copied into the HTML could drift from the one charged, and the page would show one amount while Stripe charged another.
+
+## Stage 4: Webhook endpoint
+
+**Why use the Stripe event ID as the job ID?**
+BullMQ ignores a new job whose ID already exists. If Stripe delivers the same event twice, the second `add` does nothing, so the event is queued once. The database gives the same guarantee for the stored event, through the primary key. Completed jobs are kept for 7 days so a late duplicate still finds the old job.
+
+**Why does the queue connection fail fast when Redis is down?**
+By default the Redis client buffers commands until it reconnects, so the webhook request would hang. With the offline queue turned off, adding the job fails at once, the endpoint answers 500, and Stripe redelivers the event later. Stripe's retries become the safety net.

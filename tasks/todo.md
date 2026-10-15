@@ -5,15 +5,15 @@
 **Description:** Connect to Redis and register the `stripe-events` queue with its retry settings. Give the e2e tests their own Redis database.
 
 **Acceptance criteria:**
-- [ ] `bullmq@6.3.10`, `@nestjs/bullmq@12.0.0` and `ioredis` installed with exact versions
-- [ ] `QueueModule` registers the `stripe-events` queue from `REDIS_URL`: 5 attempts, exponential backoff, completed jobs kept 7 days, failed jobs kept
-- [ ] `TEST_REDIS_URL` in `.env.example` (database 1); the e2e config points `REDIS_URL` at it and refuses the same database as `REDIS_URL`
-- [ ] A shared `test/create-test-app.ts` builds the app the way `main.ts` does (raw body, checkout pages), so e2e tests can't drift from it
+- [x] `bullmq@6.3.10`, `@nestjs/bullmq@12.0.0` and `ioredis` installed with exact versions
+- [x] `QueueModule` registers the `stripe-events` queue from `REDIS_URL`: 5 attempts, exponential backoff, completed jobs kept 7 days, failed jobs kept
+- [x] `TEST_REDIS_URL` in `.env.example` (database 1); the e2e config points `REDIS_URL` at it and refuses the same database as `REDIS_URL`
+- [x] A shared `test/create-test-app.ts` builds the app the way `main.ts` does (raw body, checkout pages), so e2e tests can't drift from it
 
 **Verification:**
-- [ ] e2e: adding two jobs with the same job ID leaves 1 job; the queue's default options are the ones above
-- [ ] Unit tests for the Redis test-URL guard
-- [ ] All five checks pass
+- [x] e2e: adding two jobs with the same job ID leaves 1 job; the queue's default options are the ones above
+- [x] Unit tests for the Redis test-URL guard
+- [x] All five checks pass
 
 **Dependencies:** None
 
