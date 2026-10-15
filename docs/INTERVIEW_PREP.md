@@ -96,3 +96,11 @@ Speed. Lint, type check and unit tests take about 25 seconds. Adding the e2e tes
 
 **How do you know the hook works?**
 It has unit tests, and they were proven to fail when the checks were switched off. It was also run by hand: a commit with a type error was blocked and showed the `tsc` error.
+
+## Stage 3: Test checkout
+
+**Why pin the Stripe library to an exact version?**
+Each major version of `stripe` moves to a newer Stripe API version, and API versions can change the shape of responses. With `^23.0.0`, a fresh install could pick up different code than the tests ran against. The exact version, plus a unit test that compares the API version in the code with the library's, makes every upgrade a deliberate change.
+
+**Why change the Stripe client's retries and timeout?**
+The library's default timeout is 80 seconds, which is far too long for a customer waiting for the payment page. 20 seconds fails faster, and 2 automatic retries cover short network blips. Retries are safe because the library sends an idempotency key, so Stripe treats a retried request as the same request instead of creating a second session.

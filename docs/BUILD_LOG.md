@@ -94,3 +94,17 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 - `npm test`: 35 unit tests pass. Lint and type check are clean.
 - Turning off the word check and the `.env` check makes 8 of the 12 hook tests fail; restoring them makes all pass.
 - Run by hand with sample input: a normal command passes (exit 0); a commit naming the assistant is blocked (exit 2); a commit with a type error in `src/` is blocked with the `tsc` error shown; a clean commit passes after the checks.
+
+## Stage 3: Test checkout (2026-10-15)
+
+### What was built
+
+- **Task 1: Stripe client and settings.** `stripe@23.0.0` installed with an exact version. `StripeModule` (global) provides one client under the `STRIPE_CLIENT` token, built from `STRIPE_SECRET_KEY`, with 2 network retries and a 20-second timeout. New setting `APP_URL` (http or https, no trailing slash) for Stripe's success and cancel redirects.
+
+### Problems and fixes
+
+- **`npm audit` reports 9 vulnerabilities.** None come from `stripe`: they are in development tools (`prisma` pulls in `mysql2` and `deepmerge-ts`, `@nestjs/mau` pulls in `tmp` and `undici`) and were already there on `main`. Left as they are; `npm audit fix --force` would install breaking versions. Revisit in stage 8.
+
+### Verified
+
+- Task 1: 41 unit tests and 10 e2e tests pass; lint, type check and build are clean. Changing `STRIPE_API_VERSION` makes the version test fail.

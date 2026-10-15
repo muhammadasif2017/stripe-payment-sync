@@ -5,13 +5,13 @@
 **Description:** Install the official Stripe library and provide one configured client to the rest of the app. Add the `APP_URL` setting.
 
 **Acceptance criteria:**
-- [ ] `stripe@23.0.0` installed with an exact version
-- [ ] `StripeModule` (global) provides the client under an injection token, built from `STRIPE_SECRET_KEY` via `ConfigService<Env, true>`
-- [ ] `APP_URL` validated in `src/config/env.validation.ts` (http/https URL) and added to `.env.example`
+- [x] `stripe@23.0.0` installed with an exact version
+- [x] `StripeModule` (global) provides the client under an injection token, built from `STRIPE_SECRET_KEY` via `ConfigService<Env, true>`
+- [x] `APP_URL` validated in `src/config/env.validation.ts` (http/https URL) and added to `.env.example`
 
 **Verification:**
-- [ ] Unit tests: the provider builds a client from the configured key; env validation rejects a missing or invalid `APP_URL`
-- [ ] `npm run typecheck`, `npm test`
+- [x] Unit tests: the provider builds a client from the configured key; env validation rejects a missing or invalid `APP_URL`
+- [x] `npm run typecheck`, `npm test`
 
 **Dependencies:** None
 

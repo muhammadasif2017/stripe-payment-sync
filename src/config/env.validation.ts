@@ -7,6 +7,8 @@ export interface Env {
   REDIS_URL: string;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
+  /** Public base URL of this app, used for Stripe's success and cancel redirects. */
+  APP_URL: string;
 }
 
 // Custom messages keep secret values out of errors; Joi's default pattern message prints the value.
@@ -26,6 +28,12 @@ const envSchema = Joi.object<Env>({
     .pattern(/^whsec_/)
     .required()
     .messages({ 'string.pattern.base': '{#label} must be a Stripe webhook secret (whsec_...)' }),
+  // No trailing slash, so paths can be appended as `${APP_URL}/success.html`.
+  APP_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .pattern(/[^/]$/)
+    .required()
+    .messages({ 'string.pattern.base': '{#label} must not end with a slash' }),
 });
 
 /**
