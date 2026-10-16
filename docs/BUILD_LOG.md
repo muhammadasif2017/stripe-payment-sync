@@ -225,3 +225,15 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - The worker restarted with the real key. Clicking **Retry** (then **Confirm**) ran attempt 6: `checkout.sessions.retrieve … status=200 duration=812ms request=req_hUQZ…`. The event is `PROCESSED` with `attempts = 6`, the payment `SUCCEEDED` (4900 cents), the order `PAID`.
   - The 401 log lines have no Stripe request ID: Stripe's authentication errors don't carry one. The line still shows status, error type and duration.
 - Task 4 fixes: 132 unit tests and 71 e2e tests pass; lint, type check and build are clean. Bypassing the same-origin check fails the cross-site test.
+
+## Stage 7: Daily reconciliation (2026-10-16)
+
+### What was built
+
+- **Task 1: Repair one Checkout Session.** Each change and why:
+  - `src/worker/stripe-event-handler.ts`: the brief asks for a job that finds payments missing from the database and queues them. Re-queuing the original Stripe event can't do that: its job ID is still in Redis for 7 days (so a new add is ignored), the processor skips events already `PROCESSED`, and the event may never have arrived. So the handler gains `reconcileSession(sessionId)`, which fetches the session with its payment intent and every page of that payment intent's refunds, then writes them through the same transaction as events. The transaction moved into a private `apply()`; only events mark a `stripe_events` row `PROCESSED`, since a repair has no row. Repair calls are logged with `job=reconciliation`. The "no valid order_id" message now names what was processed (`Event evt_...` or `Session cs_...`); the event wording is unchanged.
+  - `test/stripe-event-handler.e2e-spec.ts`: 4 tests: a deleted payment and its refund come back and the order is recomputed; running twice changes nothing; the calls are logged as `job=reconciliation` and no event row is written; a session without `order_id` fails permanently.
+
+### Verified
+
+- Task 1: 17 handler and 9 worker e2e tests pass. Skipping the refunds in the repair fails 3 of the new tests.

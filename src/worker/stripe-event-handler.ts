@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import Stripe from 'stripe';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { StripeCalls } from '../stripe/stripe-calls.js';
+import { StripeCalls, type StripeCallContext } from '../stripe/stripe-calls.js';
 import { STRIPE_CLIENT } from '../stripe/stripe.module.js';
 import {
   deriveOrderStatus,
@@ -18,7 +18,7 @@ export interface StoredEvent {
   payload: Prisma.JsonValue;
 }
 
-/** The current state of the Stripe objects behind one event, fetched before the transaction. */
+/** The current state of the Stripe objects behind one event or repair, fetched before the transaction. */
 interface Snapshot {
   orderId: string;
   session?: Stripe.Checkout.Session;
@@ -35,8 +35,10 @@ const MAX_REFUND_PAGES = 100;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Applies one Stripe event to the database: fetches the latest objects from Stripe, then writes the
- * payment, refunds, order status and the event's PROCESSED mark in one transaction.
+ * Applies Stripe's current state to the database: fetches the latest objects from Stripe, then writes
+ * the payment, refunds and order status in one transaction. Used for webhook events (which also mark
+ * their `stripe_events` row PROCESSED in that transaction) and for reconciliation repairs (which have
+ * no event row).
  */
 @Injectable()
 export class StripeEventHandler {
@@ -56,14 +58,55 @@ export class StripeEventHandler {
    */
   async handle(event: StoredEvent, attempt: number): Promise<void> {
     const snapshot = await this.fetchSnapshot(event);
+    await this.apply(snapshot, `event ${event.id}`, { id: event.id, attempt });
+  }
 
+  /**
+   * Repairs one paid Checkout Session found by reconciliation: fetches the session, its payment intent
+   * and all the payment intent's refunds, and writes them like an event would. No `stripe_events` row
+   * is involved. Safe to run any number of times.
+   * @param sessionId The Checkout Session (`cs_...`).
+   * @throws PermanentProcessingError when retrying can't help (no matching order, amounts that don't
+   *   match, a session Stripe says doesn't exist); any other error is worth retrying.
+   */
+  async reconcileSession(sessionId: string): Promise<void> {
+    const context = { job: 'reconciliation' };
+    const snapshot = await withStripeErrors(async (): Promise<Snapshot> => {
+      const session = await this.stripeCalls.run('checkout.sessions.retrieve', context, () =>
+        this.stripe.checkout.sessions.retrieve(sessionId, { expand: ['payment_intent'] }),
+      );
+      const paymentIntent =
+        typeof session.payment_intent === 'object' && session.payment_intent
+          ? session.payment_intent
+          : undefined;
+      return {
+        orderId: orderIdFrom(session.metadata, session.client_reference_id, `Session ${sessionId}`),
+        session,
+        paymentIntent,
+        // Refunds too, so a restored payment comes back with the right refunded total.
+        refunds: paymentIntent ? await this.listRefunds(paymentIntent.id, context) : undefined,
+      };
+    });
+    await this.apply(snapshot, `session ${sessionId}`);
+  }
+
+  /**
+   * Writes a snapshot in one transaction.
+   * @param source What the snapshot came from, for error messages.
+   * @param event The event to mark PROCESSED in the same transaction; none for a repair.
+   */
+  private async apply(
+    snapshot: Snapshot,
+    source: string,
+    event?: { id: string; attempt: number },
+  ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       // Lock the order row: two jobs for the same order (say, a payment and a refund) wait for each
       // other instead of both computing the status from rows the other is about to change.
       const locked = await tx.$queryRaw<{ id: string }[]>`
         SELECT id FROM orders WHERE id = ${snapshot.orderId}::uuid FOR UPDATE`;
       if (locked.length === 0) {
-        throw new PermanentProcessingError(`No order ${snapshot.orderId} for event ${event.id}`);
+        throw new PermanentProcessingError(`No order ${snapshot.orderId} for ${source}`);
       }
       const order = await tx.order.findUniqueOrThrow({ where: { id: snapshot.orderId } });
 
@@ -135,10 +178,17 @@ export class StripeEventHandler {
         },
       });
 
-      await tx.stripeEvent.update({
-        where: { id: event.id },
-        data: { status: 'PROCESSED', attempts: attempt, lastError: null, processedAt: new Date() },
-      });
+      if (event) {
+        await tx.stripeEvent.update({
+          where: { id: event.id },
+          data: {
+            status: 'PROCESSED',
+            attempts: event.attempt,
+            lastError: null,
+            processedAt: new Date(),
+          },
+        });
+      }
     });
   }
 
@@ -164,7 +214,11 @@ export class StripeEventHandler {
               ? session.payment_intent
               : undefined;
           return {
-            orderId: orderIdFrom(session.metadata, session.client_reference_id, event.id),
+            orderId: orderIdFrom(
+              session.metadata,
+              session.client_reference_id,
+              `Event ${event.id}`,
+            ),
             session,
             paymentIntent,
           };
@@ -174,7 +228,10 @@ export class StripeEventHandler {
           const paymentIntent = await this.stripeCalls.run('paymentIntents.retrieve', context, () =>
             this.stripe.paymentIntents.retrieve(objectId),
           );
-          return { orderId: orderIdFrom(paymentIntent.metadata, null, event.id), paymentIntent };
+          return {
+            orderId: orderIdFrom(paymentIntent.metadata, null, `Event ${event.id}`),
+            paymentIntent,
+          };
         }
         case 'charge.refunded':
         case 'refund.updated': {
@@ -189,7 +246,7 @@ export class StripeEventHandler {
           );
           const refunds = await this.listRefunds(piId, context);
           return {
-            orderId: orderIdFrom(paymentIntent.metadata, null, event.id),
+            orderId: orderIdFrom(paymentIntent.metadata, null, `Event ${event.id}`),
             paymentIntent,
             refunds,
           };
@@ -206,7 +263,7 @@ export class StripeEventHandler {
    */
   private async listRefunds(
     paymentIntentId: string,
-    context: { eventId: string },
+    context: StripeCallContext,
   ): Promise<Stripe.Refund[]> {
     const refunds: Stripe.Refund[] = [];
     let startingAfter: string | undefined;
@@ -230,15 +287,19 @@ export class StripeEventHandler {
   }
 }
 
-/** Reads the order ID set in stage 3's metadata; anything else (e.g. `stripe trigger` events) can't match an order. */
+/**
+ * Reads the order ID set in stage 3's metadata; anything else (e.g. `stripe trigger` events) can't
+ * match an order.
+ * @param source What is being processed, for the error message (e.g. "Event evt_...").
+ */
 function orderIdFrom(
   metadata: Stripe.Metadata | null,
   clientReferenceId: string | null,
-  eventId: string,
+  source: string,
 ): string {
   const orderId = metadata?.order_id ?? clientReferenceId ?? undefined;
   if (!orderId || !UUID.test(orderId)) {
-    throw new PermanentProcessingError(`Event ${eventId} has no valid order_id in its metadata`);
+    throw new PermanentProcessingError(`${source} has no valid order_id in its metadata`);
   }
   return orderId;
 }

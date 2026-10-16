@@ -224,3 +224,11 @@ Request and response bodies, and error messages. A Checkout Session contains the
 
 **Show me the dashboard working.**
 A worker was started with a wrong Stripe key. Each attempt logged one line, such as `checkout.sessions.retrieve event=evt_… status=401 (StripeAuthenticationError) duration=116ms`, and after 5 attempts the event was `FAILED`. The dashboard showed the job in its Failed list with the error. After the worker restarted with the right key, one click on Retry ran attempt 6: the Stripe call returned 200, the payment was recorded and the order became `PAID`. A wrong key is a realistic failure (a rotated key not yet deployed), and it showed the logging and the dashboard in one run.
+
+## Stage 7: Daily reconciliation
+
+**Why do you need reconciliation if you have webhooks and retries?**
+Webhooks can be missed: the endpoint was down longer than Stripe keeps retrying, a secret was rotated wrongly, or a bug dropped an event. Retries only help with events that arrived. Reconciliation asks Stripe directly what was paid and compares it with the database, so the database ends up right even when the event path failed. It is the difference between "usually correct" and "correct by the next morning".
+
+**Why not re-queue the original Stripe event?**
+Three reasons. The job for that event is still in Redis for 7 days, and BullMQ ignores a new job with the same ID. The worker skips events already marked `PROCESSED`. And the event may never have arrived, which is one of the cases reconciliation exists for. So a repair is its own job, keyed by the Checkout Session, and reuses the same "fetch the latest state, write it in one transaction" code.

@@ -319,6 +319,79 @@ describe('StripeEventHandler (e2e)', () => {
     ).toBe(true);
   });
 
+  describe('reconcileSession (repairs from reconciliation)', () => {
+    /** A paid order with a payment and one refund, as the worker would have recorded it. */
+    async function paidOrderWithRefund() {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id);
+      const s = session(order.id, pi.id!);
+      const refund = {
+        id: uid('re_test'),
+        amount: 1000,
+        currency: 'usd',
+        status: 'succeeded' as const,
+        payment_intent: pi.id,
+      };
+      stripeState.refunds[pi.id!] = [refund];
+      await handler.reconcileSession(s.id!);
+      return { order, pi, s };
+    }
+
+    it('brings back a deleted payment with its refunds and recomputes the order', async () => {
+      const { order, pi, s } = await paidOrderWithRefund();
+      const payment = await prisma.payment.findUniqueOrThrow({
+        where: { stripePaymentIntentId: pi.id! },
+      });
+      await prisma.refund.deleteMany({ where: { paymentId: payment.id } });
+      await prisma.payment.delete({ where: { id: payment.id } });
+      await prisma.order.update({ where: { id: order.id }, data: { status: 'PENDING' } });
+
+      await handler.reconcileSession(s.id!);
+
+      const saved = await orderWithRows(order.id);
+      expect(saved.status).toBe('PARTIALLY_REFUNDED');
+      expect(saved.payments).toMatchObject([
+        { stripePaymentIntentId: pi.id, amount: 4900, currency: 'usd', status: 'SUCCEEDED' },
+      ]);
+      expect(saved.payments[0].refunds).toMatchObject([{ amount: 1000, status: 'SUCCEEDED' }]);
+    });
+
+    it('changes nothing when run again', async () => {
+      const { order, s } = await paidOrderWithRefund();
+      const before = await orderWithRows(order.id);
+
+      await handler.reconcileSession(s.id!);
+
+      const after = await orderWithRows(order.id);
+      expect(after.payments.map((p) => p.id)).toEqual(before.payments.map((p) => p.id));
+      expect(after.payments[0].refunds).toHaveLength(1);
+      expect(after.status).toBe(before.status);
+    });
+
+    it('logs its Stripe calls as job=reconciliation and writes no stripe_events row', async () => {
+      const log = vi.mocked(Logger.prototype.log);
+      const eventsBefore = await prisma.stripeEvent.count();
+
+      const { s } = await paidOrderWithRefund();
+
+      const lines = log.mock.calls.map(([line]) => String(line));
+      expect(
+        lines.some((l) => l.startsWith('checkout.sessions.retrieve job=reconciliation ')),
+      ).toBe(true);
+      expect(lines.some((l) => l.startsWith('refunds.list job=reconciliation '))).toBe(true);
+      expect(await prisma.stripeEvent.count()).toBe(eventsBefore);
+      expect(s.id).toBeDefined();
+    });
+
+    it('fails permanently for a session without an order_id', async () => {
+      const s = session('', null, { metadata: {}, client_reference_id: null });
+
+      await expect(handler.reconcileSession(s.id!)).rejects.toThrow(
+        /Session .* has no valid order_id/,
+      );
+    });
+  });
+
   it('fails permanently when the order in the metadata does not exist, and saves nothing', async () => {
     const missing = '00000000-0000-4000-8000-000000000000';
     const pi = paymentIntent(missing);
