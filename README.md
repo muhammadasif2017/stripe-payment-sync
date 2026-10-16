@@ -1,135 +1,395 @@
+<div align="center">
+
 # Stripe Payment Sync
 
-> **Sample project.** Built from a typical client brief to show the work, not delivered to a client.
+**Every Stripe payment, failure and refund lands in your database exactly once, even when Stripe repeats itself, the database goes down, or the customer closes the tab.**
 
-A NestJS backend that receives Stripe payment events, processes them through a Redis job queue with retries, and keeps a PostgreSQL database in sync. The full scope and build plan are in [`PROJECT.md`](PROJECT.md).
+![NestJS 12](https://img.shields.io/badge/NestJS-12-E0234E?logo=nestjs&logoColor=white)
+![TypeScript strict](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)
+![Redis 7](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
+![BullMQ 6](https://img.shields.io/badge/BullMQ-6-C0392B)
+![Stripe test mode](https://img.shields.io/badge/Stripe-test%20mode%20only-635BFF?logo=stripe&logoColor=white)
 
-**Status:** stage 5 of 8 (worker with retries). A minimal checkout page creates an order and sends the customer to Stripe's test-mode payment page. `POST /webhooks/stripe` verifies, stores and queues each Stripe event; a BullMQ worker fetches the latest payment, session or refunds from Stripe and updates the order, payment and refunds in one transaction, retrying up to 5 times with exponential backoff. Orders become `PAID`, `PAYMENT_FAILED`, `EXPIRED`, `PARTIALLY_REFUNDED` or `REFUNDED` from Stripe's events, never from the success page.
+</div>
 
-## Data model
+> [!NOTE]
+> **Sample project.** Built against a realistic client brief ([`PROJECT.md`](PROJECT.md)) to show how I would solve it, not delivered to a client. Stripe runs in test mode only; no real money moves.
 
-| Table | Holds | Key point |
-|---|---|---|
-| `stripe_events` | Every webhook event Stripe sends, as received | The Stripe event ID is the primary key, so a duplicate delivery is rejected by the database |
-| `orders` | A customer's purchase of a course | Course and amount (in cents) come from the server's catalog; `PENDING` until Stripe confirms payment |
-| `payments` | Each payment attempt for an order | Unique Stripe payment intent ID |
-| `refunds` | Full or partial refunds of a payment | Unique Stripe refund ID |
+---
 
-Orders link to payments and payments to refunds. A payment or refund cannot be orphaned: deleting an order that has payments is refused. The schema is in [`prisma/schema.prisma`](prisma/schema.prisma), with a comment on each decision.
+## Contents
 
-## Requirements
+- [The problem](#the-problem)
+- [How it works](#how-it-works)
+- [What it guarantees](#what-it-guarantees)
+- [How a payment is never recorded twice](#how-a-payment-is-never-recorded-twice)
+- [When things go wrong](#when-things-go-wrong)
+- [Quick start](#quick-start)
+- [Try it end to end](#try-it-end-to-end)
+- [API](#api)
+- [Data model](#data-model)
+- [Order lifecycle](#order-lifecycle)
+- [Configuration](#configuration)
+- [Testing](#testing)
+- [Project structure](#project-structure)
+- [Roadmap](#roadmap)
+- [Known limits](#known-limits)
+- [Further reading](#further-reading)
 
-- Node.js 22.12 or newer
-- Docker Desktop (running)
+---
 
-## Run it locally
+## The problem
 
-1. Install dependencies. This also generates the Prisma client.
+An online course shop takes payments with Stripe Checkout. Its backend marks an order as paid when the customer **lands on the success page**. Customers who close the tab first have paid but never get their course. Refunds are never recorded, so the sales reports are wrong.
 
-   ```bash
-   npm install
-   ```
+This project fixes it the way Stripe intends: the success page changes nothing, and **Stripe's webhooks are the only source of truth**. Each event is verified, stored once, queued, and applied by a background worker that retries until the database matches Stripe.
 
-2. Create your `.env` from the example and fill in the Stripe test keys.
+## How it works
 
-   ```bash
-   cp .env.example .env
-   ```
+```mermaid
+flowchart TB
+    B([Customer's browser])
+    S[(Stripe)]
 
-   The app refuses to start if a variable is missing, and it only accepts Stripe test-mode keys (`sk_test_...`).
+    subgraph APP [NestJS app]
+        direction TB
+        CO["POST /checkout<br/>PENDING order, server-side price"]
+        WH["POST /webhooks/stripe<br/>verify · store · enqueue · answer 200"]
+        W["Worker<br/>fetch latest · one transaction"]
+    end
 
-3. Start PostgreSQL and Redis.
+    PG[(PostgreSQL)]
+    R[(Redis · BullMQ)]
 
-   ```bash
-   docker compose up -d
-   ```
-
-   They listen on `localhost:5435` and `localhost:6380`, so they don't clash with other local databases. Change `POSTGRES_PORT` and `REDIS_PORT` in `.env` if those ports are taken too, and update `DATABASE_URL` and `REDIS_URL` to match.
-
-4. Create the database tables.
-
-   ```bash
-   npx prisma migrate deploy
-   ```
-
-   After you change `prisma/schema.prisma`, create a new migration with `npm run db:migrate`. It runs `prisma migrate dev` and then `prisma generate`, because Prisma 7 no longer regenerates the client after a migration.
-
-5. Start the API.
-
-   ```bash
-   npm run start:dev
-   ```
-
-6. Check that it is healthy.
-
-   ```bash
-   curl http://localhost:3000/health
-   # {"status":"ok"}
-   ```
-
-   `/health` runs `SELECT 1` against PostgreSQL. It returns 503 `{"status":"error"}` when the database is unreachable.
-
-## Make a test payment
-
-1. Put your Stripe **test** secret key in `.env` as `STRIPE_SECRET_KEY` (Stripe Dashboard, test mode, Developers → API keys). `APP_URL` must be the address you open in the browser, `http://localhost:3000` by default.
-2. Start the API (`npm run start:dev`) and open <http://localhost:3000>.
-3. Choose a course and click **Buy**. The API saves a `PENDING` order, creates a Stripe Checkout Session with the order ID in its metadata, and redirects you to Stripe.
-4. Pay with card `4242 4242 4242 4242`, any future expiry date, any CVC and any postcode.
-5. Stripe sends you back to `/success.html`. The payment appears under Payments in the Stripe test dashboard, with `order_id` in its metadata.
-
-The order stays `PENDING` in the database. That is deliberate: the success page never marks an order paid, because a customer can close the tab before reaching it. Stripe's webhook will do that from stage 4.
-
-The API behind the page:
-
-```bash
-curl http://localhost:3000/checkout/courses
-curl -X POST http://localhost:3000/checkout   -H 'Content-Type: application/json'   -d '{"courseId":"nestjs-fundamentals","email":"buyer@example.com"}'
-# 201 {"orderId":"...","checkoutUrl":"https://checkout.stripe.com/..."}
+    B -- "1 · Buy" --> CO
+    CO -- "2 · Checkout Session, order_id in metadata" --> S
+    B -- "3 · pays on Stripe's page" --> S
+    S -- "4 · signed webhook" --> WH
+    CO --> PG
+    WH -- "event, id = evt_…" --> PG
+    WH -- "job, id = evt_…" --> R
+    R -- "5 · job, retried with backoff" --> W
+    W -- "6 · latest session / payment / refunds" --> S
+    W -- "7 · payment · refunds · order status" --> PG
 ```
 
-Only `courseId` and an optional `email` are accepted; the price comes from the server. Any other field, such as `amount`, gets a 400.
+1. **Checkout.** `POST /checkout` saves a `PENDING` order with the price from the server's catalog, then creates a Stripe Checkout Session carrying the order ID.
+2. **Webhook.** Stripe calls `POST /webhooks/stripe`. The endpoint checks the signature, stores the event, adds a queue job and answers `200` in milliseconds. It does no other work.
+3. **Worker.** A BullMQ worker picks up the job, fetches the **current** state of the payment from Stripe, and in **one database transaction** writes the payment, the refunds, the new order status and the event's `PROCESSED` mark.
 
-## Receive Stripe webhooks locally
+<details>
+<summary><b>The same flow as a sequence diagram</b></summary>
 
-Needs the [Stripe CLI](https://docs.stripe.com/stripe-cli). Run every CLI command with your **test** key, so the CLI can't touch live mode even if your login defaults to it. In Git Bash:
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Customer
+    participant A as API
+    participant S as Stripe
+    participant D as PostgreSQL
+    participant Q as Redis (BullMQ)
+    participant W as Worker
+
+    C->>A: POST /checkout { courseId }
+    A->>D: INSERT order (PENDING, catalog price)
+    A->>S: create Checkout Session (metadata.order_id, idempotency key)
+    A-->>C: 201 { checkoutUrl }
+    C->>S: pays with card
+    S-->>C: redirect to /success.html (changes nothing)
+    S->>A: POST /webhooks/stripe (signed)
+    A->>A: verify signature on the raw body
+    A->>D: INSERT stripe_events (PK = evt_…)
+    A->>Q: add job (jobId = evt_…)
+    A-->>S: 200
+    Q->>W: job
+    W->>S: retrieve session + payment intent
+    W->>D: BEGIN · lock order · upsert payment · order PAID · event PROCESSED · COMMIT
+```
+
+</details>
+
+## What it guarantees
+
+| Guarantee | How | Proof |
+| --- | --- | --- |
+| Only Stripe can create events | HMAC signature checked on the **raw** request body; signatures older than 5 minutes refused | e2e: wrong secret, changed body, old timestamp, missing header, live-mode event → `400`, nothing saved |
+| Each event is processed once | Stripe event ID is the table's primary key **and** the queue's job ID; processed events are skipped | e2e: the same event delivered twice → 1 row, 1 job; real `stripe events resend` → logged as duplicate |
+| No payment is lost | Event is stored before the `200`; any failure answers `500` so Stripe redelivers; jobs live in Redis, not in memory | Real run: PostgreSQL stopped, jobs failed and retried, completed when it came back |
+| Order status is always right | Computed from **all** payments and refunds, not stepped per event; latest objects fetched from Stripe | Unit tests for every status; e2e: refund before payment, late decline after success, cancel after expiry |
+| The client can't choose the price | Request accepts only `courseId` and `email`; the server sets amount and currency | e2e: a body with `amount` → `400`, no order |
+| Never live mode | Startup refuses keys that aren't `sk_test_…`; live-mode events refused | Unit and e2e tests |
+
+## How a payment is never recorded twice
+
+The brief asks this directly. The answer is four independent layers, each enforced by something stronger than an `if` statement:
+
+1. **The database refuses a second copy of an event.** `stripe_events.id` is Stripe's event ID and the primary key. Two simultaneous deliveries both try to insert; PostgreSQL lets exactly one win.
+2. **The queue refuses a second job.** The job ID is the same event ID, and BullMQ ignores a job whose ID already exists.
+3. **The worker refuses to redo work.** An event already marked `PROCESSED` is skipped.
+4. **Writes are upserts on Stripe's own IDs.** `stripe_payment_intent_id` and `stripe_refund_id` are unique, and the order status is recomputed from scratch. Even processing the same event twice ends in the same rows.
+
+## When things go wrong
+
+| Failure | What happens |
+| --- | --- |
+| A request with a forged or missing signature | `400`, nothing stored, reason logged (never returned) |
+| Stripe delivers an event twice | `200`, still one row and one job |
+| PostgreSQL is down when the webhook arrives | `500`; Stripe redelivers later (for up to 3 days in live mode) |
+| Redis is down when the webhook arrives | Fails fast with `500` instead of hanging; Stripe redelivers, the stored event is reused and the job is added |
+| PostgreSQL is down while the worker runs | Attempt fails, error logged and saved; retried after 10, 20, 40, 80 seconds |
+| Stripe rate-limits or has an outage | Retried like any temporary error |
+| Event for an unknown order, wrong amount or currency, or an object Stripe says doesn't exist | Fails **at once** (a retry can't fix it); event marked `FAILED` with the reason |
+| All 5 attempts fail | Event marked `FAILED` with `attempts = 5` and the last error |
+| The customer closes the tab after paying | Nothing breaks: the webhook, not the browser, marks the order `PAID` |
+
+## Quick start
+
+**You need:** Node.js 22.12+, Docker Desktop, a free [Stripe](https://dashboard.stripe.com/register) account in test mode, and the [Stripe CLI](https://docs.stripe.com/stripe-cli) for webhooks.
 
 ```bash
+# 1. Install (also generates the Prisma client)
+npm install
+
+# 2. Configure: then put your Stripe test key (sk_test_…) in .env
+cp .env.example .env
+
+# 3. Start PostgreSQL (localhost:5435) and Redis (localhost:6380)
+docker compose up -d
+
+# 4. Create the tables
+npx prisma migrate deploy
+
+# 5. Run the API and the worker
+npm run start:dev
+```
+
+```bash
+curl http://localhost:3000/health
+# {"status":"ok"}   (503 {"status":"error"} when PostgreSQL is unreachable)
+```
+
+> [!TIP]
+> The non-default ports (`5435`, `6380`) avoid clashing with other local databases. Change `POSTGRES_PORT` / `REDIS_PORT` and the two URLs in `.env` if they are taken.
+
+The app **refuses to start** with a missing or invalid setting, and names every problem at once without printing secret values.
+
+## Try it end to end
+
+### 1. Forward Stripe's webhooks to your machine
+
+> [!IMPORTANT]
+> The Stripe CLI may log in to **live mode** by default. Run it with your test key so it can only ever see test data.
+
+```bash
+# Git Bash
 export STRIPE_API_KEY=$(grep '^STRIPE_SECRET_KEY=' .env | cut -d= -f2-)
 ```
 
-In PowerShell: `$env:STRIPE_API_KEY = (Select-String '^STRIPE_SECRET_KEY=(.*)' .env).Matches.Groups[1].Value`.
-
-1. Put the webhook signing secret in `.env` as `STRIPE_WEBHOOK_SECRET`. Print it with `stripe listen --print-secret`; it stays the same for this machine.
-2. Start the API (`npm run start:dev`).
-3. Forward events to it:
-
-   ```bash
-   stripe listen --all-snapshot --latest --forward-to localhost:3000/webhooks/stripe
-   ```
-
-4. In another terminal, fire a test payment's events, or buy a course on the checkout page:
-
-   ```bash
-   stripe trigger checkout.session.completed
-   ```
-
-The worker runs inside the API process by default and updates the order a moment after the event arrives. To run them as separate processes, start the API with `WORKER_ENABLED=false` and a second copy with `WORKER_ENABLED=true` and another `PORT`. Failed attempts are retried after 10, 20, 40 and 80 seconds; each failure is saved on the event (`attempts`, `last_error`), and after the 5th, or at once for an error a retry can't fix (such as an event with no matching order), the event is marked `FAILED`.
-
-Every event gets 200. Only the types the system handles (`checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`, `payment_intent.canceled`, `charge.refunded`, `refund.updated`) are stored in `stripe_events` and queued, once each, with the Stripe event ID as both the row ID and the job ID. A request with a missing or wrong signature gets 400 and nothing is saved.
-
-## Tests
-
-```bash
-npm test           # unit tests
-npm run test:e2e   # end-to-end tests; needs `docker compose up -d` and a filled-in .env (Stripe is faked, no key needed)
-npm run lint
-npm run typecheck  # type-checks src/ and test/; Vitest and the build skip test files
+```powershell
+# PowerShell
+$env:STRIPE_API_KEY = (Select-String '^STRIPE_SECRET_KEY=(.*)' .env).Matches.Groups[1].Value
 ```
 
-The end-to-end tests use their own database, `payments_test`, set by `TEST_DATABASE_URL` in `.env`, and their own Redis database, `TEST_REDIS_URL` (database 1). They sign their own webhook payloads with a fixed test secret. Before the tests run, they create it if it is missing and apply every migration, so your development data in `payments` is never touched. They refuse to run if both URLs reach the same database (same host, port and name), or if the test database is not on this machine. For a throwaway database elsewhere, such as a CI service, set `ALLOW_REMOTE_TEST_DATABASE=true`.
+```bash
+stripe listen --print-secret        # put this value in .env as STRIPE_WEBHOOK_SECRET, then restart the API
+stripe listen --all-snapshot --latest --forward-to localhost:3000/webhooks/stripe
+```
 
-## Project docs
+`--latest` formats events with the API version the code targets (`2026-09-30.endive`).
 
-- [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md): what was built in each stage and the problems hit along the way
-- [`docs/TECH_STACK.md`](docs/TECH_STACK.md): why each technology is used
-- [`docs/INTERVIEW_PREP.md`](docs/INTERVIEW_PREP.md): questions a buyer or interviewer may ask, with answers
+### 2. Buy a course
+
+Open <http://localhost:3000>, click **Buy**, and pay with card **4242 4242 4242 4242**, any future date, any CVC. Within a second or two:
+
+```bash
+docker compose exec postgres psql -U payments -d payments \
+  -c "select status, amount, currency from orders order by created_at desc limit 1"
+#  status | amount | currency
+# --------+--------+----------
+#  PAID   |   4900 | usd
+```
+
+### 3. Refund part of it
+
+```bash
+stripe refunds create --payment-intent pi_... --amount 1000
+```
+
+The order becomes `PARTIALLY_REFUNDED`; refund the rest and it becomes `REFUNDED`.
+
+### 4. Break the database on purpose
+
+In Git Bash (the `VAR=value command` form sets a variable for one command):
+
+```bash
+WORKER_ENABLED=false npm run start:dev          # terminal 1: API only
+# buy a course, then:
+docker compose stop postgres
+WORKER_ENABLED=true PORT=3001 npm run start     # terminal 2: worker only; jobs fail and are retried
+docker compose start postgres                   # the next retry completes the payment
+```
+
+## API
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `GET` | `/health` | | `200 {"status":"ok"}`, or `503` when PostgreSQL is unreachable |
+| `GET` | `/checkout/courses` | | Courses with server-side prices |
+| `POST` | `/checkout` | `{ "courseId": "nestjs-fundamentals", "email"?: "..." }` | `201 { orderId, checkoutUrl }`; `400` for an unknown course or any extra field; `502` (generic message) when Stripe fails |
+| `POST` | `/webhooks/stripe` | Stripe event, `Stripe-Signature` header | `200 {"received":true}`; `400` for a bad signature or live mode; `500` so Stripe retries |
+| `GET` | `/`, `/success.html`, `/cancel.html` | | Minimal checkout pages |
+
+```bash
+curl -X POST http://localhost:3000/checkout \
+  -H 'Content-Type: application/json' \
+  -d '{"courseId":"nestjs-fundamentals","email":"buyer@example.com"}'
+# 201 {"orderId":"…","checkoutUrl":"https://checkout.stripe.com/…"}
+```
+
+**Events stored and processed:** `checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`, `payment_intent.canceled`, `charge.refunded`, `refund.updated`. Every other type gets `200` and is dropped, so Stripe stops resending it.
+
+## Data model
+
+```mermaid
+erDiagram
+    ORDERS ||--o{ PAYMENTS : "paid by"
+    PAYMENTS ||--o{ REFUNDS : "refunded by"
+
+    STRIPE_EVENTS {
+        text id PK "evt_… from Stripe"
+        text type
+        jsonb payload
+        enum status "PENDING · PROCESSED · FAILED"
+        int attempts
+        text last_error
+    }
+    ORDERS {
+        uuid id PK
+        text course_id
+        enum status
+        int amount "cents, > 0"
+        char3 currency
+        text stripe_checkout_session_id UK
+    }
+    PAYMENTS {
+        uuid id PK
+        uuid order_id FK "ON DELETE RESTRICT"
+        text stripe_payment_intent_id UK
+        int amount "cents, > 0"
+        enum status "SUCCEEDED · FAILED · CANCELED"
+    }
+    REFUNDS {
+        uuid id PK
+        uuid payment_id FK "ON DELETE RESTRICT"
+        text stripe_refund_id UK
+        int amount "cents, > 0"
+        enum status "PENDING · SUCCEEDED · FAILED · CANCELED"
+    }
+```
+
+- **Money is integer cents**, never floats: `0.1 + 0.2` can't go wrong. `CHECK (amount > 0)` on every money column.
+- **Every Stripe ID is unique**, which is what makes upserts safe.
+- **Financial history can't vanish:** foreign keys are `ON DELETE RESTRICT`, so deleting an order with payments is refused.
+- `stripe_events` has no foreign keys on purpose: it is the inbox, written before anything knows which order an event belongs to.
+
+The schema, with a comment on each decision, is in [`prisma/schema.prisma`](prisma/schema.prisma).
+
+## Order lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: POST /checkout
+    PENDING --> PAID: payment succeeded
+    PENDING --> PAYMENT_FAILED: card declined
+    PAYMENT_FAILED --> PAID: retried with another card
+    PENDING --> EXPIRED: checkout expired
+    PAYMENT_FAILED --> EXPIRED: checkout expired
+    PAID --> PARTIALLY_REFUNDED: part refunded
+    PARTIALLY_REFUNDED --> REFUNDED: rest refunded
+    PAID --> REFUNDED: fully refunded
+```
+
+The status is **computed**, not stepped: a pure function looks at all succeeded payments and refunds of the order. Events can arrive in any order, or twice, and the result is the same. An expired checkout stays `EXPIRED` unless money was actually paid.
+
+## Configuration
+
+All settings come from environment variables (`.env` locally), validated at startup.
+
+| Variable | Example | Purpose |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP port (default 3000) |
+| `APP_URL` | `http://localhost:3000` | Where Stripe sends the customer back; no trailing slash |
+| `DATABASE_URL` | `postgresql://…:5435/payments` | PostgreSQL |
+| `REDIS_URL` | `redis://localhost:6380` | Redis for the queue |
+| `STRIPE_SECRET_KEY` | `sk_test_…` | Test-mode secret key; anything else is refused |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_…` | Verifies webhook signatures |
+| `WORKER_ENABLED` | `true` | `false` runs the API only, so API and worker can run as separate processes |
+| `TEST_DATABASE_URL` | `…/payments_test` | Database for e2e tests; must differ from `DATABASE_URL` |
+| `TEST_REDIS_URL` | `redis://localhost:6380/1` | Redis database for e2e tests; must differ from `REDIS_URL` |
+
+`.env` is git-ignored; [`.env.example`](.env.example) documents every variable.
+
+## Testing
+
+```bash
+npm test            # 98 unit tests
+npm run test:e2e    # 53 end-to-end tests (needs `docker compose up -d`)
+npm run lint
+npm run typecheck
+npm run build
+```
+
+- **Real infrastructure, isolated.** e2e tests run against their own PostgreSQL database (`payments_test`, created and migrated automatically) and their own Redis database. They refuse to start if pointed at the development database or a remote server.
+- **No network, no secrets.** Stripe is replaced by a fake client and webhook payloads are signed locally, so the suite runs offline and in CI.
+- **The key tests are proven to catch their bug.** Each was checked by breaking the code on purpose (dropping the job ID, skipping signature checks, an off-by-one in the retry count…) and watching it fail. The full list is in the [build log](docs/BUILD_LOG.md).
+- **Verified against real Stripe** at every stage since checkout: test payments with card 4242, `stripe trigger`, event redelivery, refunds, and a live database outage.
+
+## Project structure
+
+```text
+src/
+├── main.ts, app.module.ts, app.setup.ts   bootstrap, raw body, checkout pages
+├── config/        environment validation (Joi): refuses to start misconfigured
+├── prisma/        the single database client
+├── stripe/        the Stripe client, pinned API version
+├── checkout/      POST /checkout, course catalog, request validation
+├── webhooks/      POST /webhooks/stripe: verify, store, enqueue
+├── queue/         BullMQ queue and its retry settings
+├── worker/        processor, event handler, status mapping functions
+└── health/        GET /health readiness check
+prisma/            schema and migrations (including hand-written CHECK constraints)
+public/            minimal checkout, success and cancel pages
+test/              e2e tests and their helpers (isolated database, Redis, signing)
+docs/              build log, tech choices, interview questions
+```
+
+## Roadmap
+
+The project is built in eight stages, each delivered as one reviewed pull request.
+
+- [x] **1. Project setup**: NestJS, Prisma, Docker Compose, validated configuration, health check
+- [x] **2. Data model**: events, orders, payments, refunds, with database-level guarantees
+- [x] **3. Test checkout**: orders and Stripe Checkout Sessions, minimal pages
+- [x] **4. Webhook endpoint**: signature check, store once, queue by event ID
+- [x] **5. Worker with retries**: latest-object processing, one transaction, 5 attempts with backoff
+- [ ] **6. Logging and dashboard**: every Stripe call logged; Bull Board behind a login to inspect and retry failed jobs
+- [ ] **7. Daily reconciliation**: compare the last two days of Stripe checkouts with the database and repair anything missed
+- [ ] **8. CI and Docker**: GitHub Actions on every push; `docker compose up` starts API, worker, PostgreSQL and Redis
+
+## Known limits
+
+Honest edges of the current version, each with its planned answer:
+
+- **One currency (USD), card payments only.** Multiple currencies are out of scope; Stripe's Adaptive Pricing is turned off. Payment methods that settle days later aren't handled yet; reconciliation (stage 7) is the safety net.
+- **If PostgreSQL is still down on the 5th attempt**, the event can't be marked `FAILED` and stays `PENDING`; the failed job is visible in the dashboard (stage 6) and reconciliation catches the payment.
+- **Amounts are 32-bit integers**: up to about $21 million per row, plenty for course sales.
+
+## Further reading
+
+| Document | What's in it |
+| --- | --- |
+| [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md) | What was built at each stage, why each change was made, problems hit and how they were verified |
+| [`docs/TECH_STACK.md`](docs/TECH_STACK.md) | Why each technology was chosen |
+| [`docs/INTERVIEW_PREP.md`](docs/INTERVIEW_PREP.md) | The questions a client or interviewer asks about this design, answered |
+| [`PROJECT.md`](PROJECT.md) | The original brief, acceptance criteria and build plan |
