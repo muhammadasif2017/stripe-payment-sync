@@ -79,7 +79,7 @@
 - [x] Payment row saved, deleted, reconciliation run from the dashboard, row back with the same payment intent, amount, currency and status; order `PAID`
 - [x] Summary log shows 1 missing, 1 queued, the `stripe trigger` session skipped; a second run queues nothing
 - [x] `README.md`, `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md` (why reconciliation, why not re-queue events, the selection rule, job schedulers)
-- [ ] PR from `stage-7-reconciliation` to `main`
+- [x] PR from `stage-7-reconciliation` to `main`
 
 **Verification:**
 - [x] Manual check with Docker, the browser and database queries
@@ -93,5 +93,5 @@
 ## Checkpoint: Stage 7 complete
 - [x] All five checks pass
 - [x] Stage 7 "Done when" from `PROJECT.md` met
-- [ ] Commit, push, open PR
+- [x] Commit, push, open PR
 - [ ] Human review and merge before stage 8
