@@ -47,20 +47,20 @@
 **Description:** A `reconciliation` queue with a daily job scheduler; its processor finds missing payments and queues repairs.
 
 **Acceptance criteria:**
-- [ ] `reconciliation` queue registered in `QueueModule` and shown in Bull Board
-- [ ] `RECONCILIATION_CRON` setting (default `0 3 * * *`, UTC), validated at startup, in `.env.example`
-- [ ] Worker registers the scheduler with `upsertJobScheduler` at startup; processor concurrency 1
-- [ ] Lists `complete` sessions created in the last 2 days (seconds), every page through `StripeCalls` with a page limit
-- [ ] Missing = paid session, valid and existing order, no `SUCCEEDED` payment for its payment intent (one `findMany`)
-- [ ] Queues `reconcile-session` with job ID `reconcile-<sessionId>-<run timestamp>`
-- [ ] Logs one summary: checked, skipped (no order ID / unknown order / not paid), missing, queued
+- [x] `reconciliation` queue registered in `QueueModule` and shown in Bull Board
+- [x] `RECONCILIATION_CRON` setting (default `0 3 * * *`, UTC), validated at startup, in `.env.example`
+- [x] Worker registers the scheduler with `upsertJobScheduler` at startup; processor concurrency 1
+- [x] Lists `complete` sessions created in the last 2 days (seconds), every page through `StripeCalls` with a page limit
+- [x] Missing = paid session, valid and existing order, no `SUCCEEDED` payment for its payment intent (one `findMany`)
+- [x] Queues `reconcile-session` with job ID `reconcile-<sessionId>-<run timestamp>`
+- [x] Logs one summary: checked, skipped (no order ID / unknown order / not paid), missing, queued
 
 **Verification:**
-- [ ] Unit tests for the window (pinned `now`), pagination and the selection rule
-- [ ] e2e: with a fake Stripe client, one missing payment is queued, a present one is not, the `stripe trigger`-style session is skipped; a second run queues again with a different job ID
-- [ ] e2e: the dashboard's scheduler **Run now** route queues a reconciliation job; the `reconciliation` queue is listed
-- [ ] e2e cleanup removes the scheduler and the queue's jobs
-- [ ] Prove a test can fail (e.g. use milliseconds for the window)
+- [x] Unit tests for the window (pinned `now`), pagination and the selection rule
+- [x] e2e: with a fake Stripe client, one missing payment is queued, a present one is not, the `stripe trigger`-style session is skipped; a second run queues again with a different job ID
+- [x] e2e: the dashboard's scheduler **Run now** route queues a reconciliation job; the `reconciliation` queue is listed
+- [x] e2e cleanup removes the scheduler and the queue's jobs
+- [x] Prove a test can fail (e.g. use milliseconds for the window)
 
 **Dependencies:** Task 2
 
@@ -69,7 +69,7 @@
 **Estimated scope:** Medium
 
 ## Checkpoint: Reconciliation
-- [ ] Tasks 1–3 verified, all five checks pass, commit
+- [x] Tasks 1–3 verified, all five checks pass, commit
 
 ## Task 4: Delete-and-restore check, docs and pull request
 

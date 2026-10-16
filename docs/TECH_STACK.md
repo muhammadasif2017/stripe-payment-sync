@@ -69,6 +69,10 @@ A ready-made web dashboard for BullMQ queues, as the brief asks: it lists waitin
 
 The dashboard login. The browser shows its own login box when the server answers 401 with `WWW-Authenticate: Basic`, then sends `user:password` in base64 with every request. No sessions, cookies or login page to build. It is about 30 lines, so no library: the user name and password are each hashed with SHA-256 and compared with `crypto.timingSafeEqual`, which takes the same time whether the first or the last character is wrong. Limits: no logout (close the browser), and base64 is not encryption, so outside localhost it must run over HTTPS. Because the browser re-sends the credentials to any request for the dashboard, a second middleware refuses changes that the browser's `Sec-Fetch-Site` or `Origin` header marks as coming from another site.
 
+## BullMQ job schedulers and `cron-parser` 5.10.1
+
+The daily reconciliation is a BullMQ job scheduler, not `@nestjs/schedule` (an in-process timer). The schedule is stored in Redis: with several worker processes only one runs each day's job, a run is not lost to a restart, and the scheduler and its runs show in Bull Board, which has a **Run now** button. No new library: it is part of BullMQ. `cron-parser` is the library BullMQ uses to read cron patterns; it is installed directly, at the same version, so `RECONCILIATION_CRON` is checked at startup with exactly the rules BullMQ will apply.
+
 ## Claude Code hooks
 
 The AI coding assistant reads `CLAUDE.md` at the start of each session, but those rules are only advice. A hook is a script the tool runs at fixed points, here before every shell command, and it can block the command. `.claude/hooks/commit-guard.mjs` is plain Node.js with no dependencies, so it runs the same in Git Bash and PowerShell. It only affects the assistant; commits typed by a person go straight to git.

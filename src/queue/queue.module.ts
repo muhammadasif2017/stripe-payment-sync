@@ -37,6 +37,27 @@ export const STRIPE_EVENT_JOB_OPTIONS: DefaultJobOptions = {
   removeOnFail: false,
 };
 
+/** Queue for the daily reconciliation run (stage 7); its job scheduler keeps the next run here. */
+export const RECONCILIATION_QUEUE = 'reconciliation';
+
+/** Name of the job that runs one reconciliation. */
+export const RECONCILIATION_JOB = 'reconcile';
+
+/** ID of the job scheduler that adds a {@link RECONCILIATION_JOB} every day. */
+export const RECONCILIATION_SCHEDULER_ID = 'daily-reconciliation';
+
+/**
+ * Settings for a reconciliation run.
+ * - 3 attempts, 1 then 2 minutes apart: a Stripe or database blip shouldn't skip a whole day.
+ * - Completed runs are kept 30 days: each one's return value is its summary, readable on the dashboard.
+ */
+export const RECONCILIATION_JOB_OPTIONS: DefaultJobOptions = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 60_000 },
+  removeOnComplete: { age: 30 * 24 * 60 * 60 },
+  removeOnFail: false,
+};
+
 /** Connects BullMQ to Redis and registers the queues. Inject a queue with `@InjectQueue(name)`. */
 @Global()
 @Module({
@@ -52,10 +73,11 @@ export const STRIPE_EVENT_JOB_OPTIONS: DefaultJobOptions = {
         },
       }),
     }),
-    BullModule.registerQueue({
-      name: STRIPE_EVENTS_QUEUE,
-      defaultJobOptions: STRIPE_EVENT_JOB_OPTIONS,
-    }),
+    BullModule.registerQueue(
+      { name: STRIPE_EVENTS_QUEUE, defaultJobOptions: STRIPE_EVENT_JOB_OPTIONS },
+      // Registered here, not only in the worker, so the API-only process and the dashboard see it.
+      { name: RECONCILIATION_QUEUE, defaultJobOptions: RECONCILIATION_JOB_OPTIONS },
+    ),
   ],
   exports: [BullModule],
 })

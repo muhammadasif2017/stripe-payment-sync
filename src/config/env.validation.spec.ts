@@ -85,6 +85,22 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...validEnv, ADMIN_PASSWORD: '' })).toThrow('ADMIN_PASSWORD');
   });
 
+  it('defaults RECONCILIATION_CRON to 03:00 every day', () => {
+    expect(validateEnv(validEnv).RECONCILIATION_CRON).toBe('0 3 * * *');
+    expect(
+      validateEnv({ ...validEnv, RECONCILIATION_CRON: '30 2 * * 1' }).RECONCILIATION_CRON,
+    ).toBe('30 2 * * 1');
+  });
+
+  it.each(['61 3 * * *', 'every day', '0 3 * *', '0 0 3 * * *'])(
+    'rejects the cron pattern %j',
+    (pattern) => {
+      expect(() => validateEnv({ ...validEnv, RECONCILIATION_CRON: pattern })).toThrow(
+        'RECONCILIATION_CRON',
+      );
+    },
+  );
+
   it('rejects an ADMIN_USERNAME with a colon', () => {
     expect(() => validateEnv({ ...validEnv, ADMIN_USERNAME: 'ad:min' })).toThrow('ADMIN_USERNAME');
   });

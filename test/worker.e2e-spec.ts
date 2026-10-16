@@ -5,7 +5,12 @@ import type { Job, Queue } from 'bullmq';
 import request from 'supertest';
 import { AppModule } from './../src/app.module.js';
 import { PrismaService } from './../src/prisma/prisma.service.js';
-import { STRIPE_EVENTS_QUEUE, type StripeEventJob } from './../src/queue/queue.module.js';
+import {
+  RECONCILIATION_QUEUE,
+  RECONCILIATION_SCHEDULER_ID,
+  STRIPE_EVENTS_QUEUE,
+  type StripeEventJob,
+} from './../src/queue/queue.module.js';
 import { STRIPE_CLIENT } from './../src/stripe/stripe.module.js';
 import { WorkerModule } from './../src/worker/worker.module.js';
 
@@ -67,6 +72,10 @@ describe('Stripe events worker (e2e)', () => {
     await prisma?.order.deleteMany({ where: { id: { in: orderIds } } });
     await prisma?.stripeEvent.deleteMany({ where: { id: { in: eventIds } } });
     await queue?.obliterate({ force: true });
+    // The worker module also registers the daily reconciliation scheduler; leave Redis clean.
+    const reconciliation = app?.get<Queue>(getQueueToken(RECONCILIATION_QUEUE));
+    await reconciliation?.removeJobScheduler(RECONCILIATION_SCHEDULER_ID);
+    await reconciliation?.obliterate({ force: true });
     await app?.close();
   });
 

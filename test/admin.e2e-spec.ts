@@ -3,7 +3,11 @@ import { Logger } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Queue, UnrecoverableError, Worker } from 'bullmq';
 import request from 'supertest';
-import { STRIPE_EVENTS_QUEUE, type StripeEventJob } from './../src/queue/queue.module.js';
+import {
+  RECONCILIATION_QUEUE,
+  STRIPE_EVENTS_QUEUE,
+  type StripeEventJob,
+} from './../src/queue/queue.module.js';
 import { createTestApp } from './create-test-app.js';
 
 // The queue dashboard at /admin/queues: mounted, behind Basic auth on every path, and able to retry.
@@ -42,12 +46,13 @@ describe('Queue dashboard (e2e)', () => {
     expect(res.text).toContain('<div id="root">');
   });
 
-  it('lists the stripe-events queue through its API', async () => {
+  it('lists both queues through its API', async () => {
     const res = await get('/admin/queues/api/queues').auth(USER, PASSWORD).expect(200);
 
-    expect((res.body as { queues: { name: string }[] }).queues.map((q) => q.name)).toEqual([
-      STRIPE_EVENTS_QUEUE,
-    ]);
+    // stripe-events (stage 6) and reconciliation (stage 7), so a run can be started from here.
+    expect((res.body as { queues: { name: string }[] }).queues.map((q) => q.name).sort()).toEqual(
+      [RECONCILIATION_QUEUE, STRIPE_EVENTS_QUEUE].sort(),
+    );
   });
 
   it.each([

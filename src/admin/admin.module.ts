@@ -4,7 +4,7 @@ import { BullBoardModule } from '@bull-board/nestjs';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Env } from '../config/env.validation.js';
-import { STRIPE_EVENTS_QUEUE } from '../queue/queue.module.js';
+import { RECONCILIATION_QUEUE, STRIPE_EVENTS_QUEUE } from '../queue/queue.module.js';
 import type { RequestHandler } from 'express';
 import { createBasicAuth } from './basic-auth.js';
 import { rejectCrossSite } from './same-origin.js';
@@ -41,7 +41,10 @@ function dashboardGuard(basicAuth: RequestHandler): RequestHandler {
         ),
       }),
     }),
-    BullBoardModule.forFeature({ name: STRIPE_EVENTS_QUEUE, adapter: BullMQAdapter }),
+    BullBoardModule.forFeature(
+      { name: STRIPE_EVENTS_QUEUE, adapter: BullMQAdapter },
+      { name: RECONCILIATION_QUEUE, adapter: BullMQAdapter },
+    ),
   ],
 })
 export class AdminModule {}

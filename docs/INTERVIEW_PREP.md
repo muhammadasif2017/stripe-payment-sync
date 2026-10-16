@@ -232,3 +232,15 @@ Webhooks can be missed: the endpoint was down longer than Stripe keeps retrying,
 
 **Why not re-queue the original Stripe event?**
 Three reasons. The job for that event is still in Redis for 7 days, and BullMQ ignores a new job with the same ID. The worker skips events already marked `PROCESSED`. And the event may never have arrived, which is one of the cases reconciliation exists for. So a repair is its own job, keyed by the Checkout Session, and reuses the same "fetch the latest state, write it in one transaction" code.
+
+**How does it decide what is missing?**
+It lists the completed Checkout Sessions of the last 2 days from Stripe. A session needs repair when Stripe says it is paid, it carries the ID of an order that exists, and the database has no succeeded payment for its payment intent. That one rule covers a deleted row, a webhook that never came, an event stuck after the database was down, and a stale failed row. Sessions without an order ID (test events from `stripe trigger`) or with an unknown order are counted and skipped, never queued: those would fail every day. All the payments are loaded in one query, not one per session.
+
+**Why a BullMQ job scheduler instead of a cron library?**
+An in-process timer runs in every copy of the app, so two workers would reconcile twice, and a restart at the wrong moment skips a day. A BullMQ scheduler stores the schedule in Redis and creates one job per run, which exactly one worker takes. Runs get retries like any job, their result shows on the dashboard, and an admin can press "Run now".
+
+**Why is each repair job ID unique per run?**
+BullMQ ignores a job whose ID already exists, and completed jobs are kept for 7 days. A fixed ID like `reconcile-<session>` would make tomorrow's repair a silent no-op if today's had already run. Adding the run's timestamp makes every run's repairs real. Repairs are idempotent (upserts on Stripe IDs, status recomputed), so an occasional duplicate does no harm.
+
+**What does Stripe's `created` filter take?**
+Unix seconds. JavaScript dates are in milliseconds, and passing milliseconds would ask for sessions created thousands of years from now: the run would quietly find nothing. A unit test pins the exact number for a known date, and an e2e test checks what was sent to Stripe.

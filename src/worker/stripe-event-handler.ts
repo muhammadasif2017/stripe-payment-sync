@@ -6,6 +6,7 @@ import { StripeCalls, type StripeCallContext } from '../stripe/stripe-calls.js';
 import { STRIPE_CLIENT } from '../stripe/stripe.module.js';
 import {
   deriveOrderStatus,
+  findOrderId,
   PermanentProcessingError,
   toPaymentStatus,
   toRefundStatus,
@@ -31,8 +32,6 @@ const REFUND_PAGE_SIZE = 100;
 
 /** Stops a runaway pagination loop: 100 pages is 10,000 refunds, far more than one payment can have. */
 const MAX_REFUND_PAGES = 100;
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Applies Stripe's current state to the database: fetches the latest objects from Stripe, then writes
@@ -297,8 +296,8 @@ function orderIdFrom(
   clientReferenceId: string | null,
   source: string,
 ): string {
-  const orderId = metadata?.order_id ?? clientReferenceId ?? undefined;
-  if (!orderId || !UUID.test(orderId)) {
+  const orderId = findOrderId(metadata, clientReferenceId);
+  if (!orderId) {
     throw new PermanentProcessingError(`${source} has no valid order_id in its metadata`);
   }
   return orderId;

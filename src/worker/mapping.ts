@@ -9,6 +9,22 @@ export class PermanentProcessingError extends Error {
   override readonly name = 'PermanentProcessingError';
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Reads the order ID that stage 3's checkout puts on the session and the payment intent.
+ * @param metadata The object's metadata (`order_id`).
+ * @param clientReferenceId The session's `client_reference_id`, also the order ID; null for payment intents.
+ * @returns The order ID, or undefined when there is none or it isn't a UUID (e.g. `stripe trigger` objects).
+ */
+export function findOrderId(
+  metadata: Stripe.Metadata | null | undefined,
+  clientReferenceId: string | null | undefined,
+): string | undefined {
+  const orderId = metadata?.order_id ?? clientReferenceId ?? undefined;
+  return orderId && UUID.test(orderId) ? orderId : undefined;
+}
+
 /**
  * Maps a Stripe payment intent to the status of its `payments` row.
  * @param paymentIntent The payment intent as fetched from Stripe now, not as the event described it.
@@ -73,9 +89,7 @@ export function deriveOrderStatus(facts: OrderFacts): OrderStatus {
   const refunded = sum(facts.refunds, 'SUCCEEDED');
 
   if (refunded > paid) {
-    throw new PermanentProcessingError(
-      `Refunds (${refunded}) exceed the amount paid (${paid})`,
-    );
+    throw new PermanentProcessingError(`Refunds (${refunded}) exceed the amount paid (${paid})`);
   }
   if (paid > 0) {
     if (refunded === 0) return 'PAID';
