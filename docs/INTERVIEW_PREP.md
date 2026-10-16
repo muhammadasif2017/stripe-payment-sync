@@ -163,3 +163,32 @@ Processing needs Stripe API calls and several database writes, which can be slow
 
 **How do you test webhooks on your own machine?**
 Two ways. Automated tests sign their own payloads with `stripe.webhooks.generateTestHeaderString` and a test secret, so they need no network. For the real thing, the Stripe CLI's `stripe listen --forward-to localhost:3000/webhooks/stripe` opens a connection to Stripe and forwards test-mode events to the local app, signed with a secret it prints; `stripe trigger checkout.session.completed` creates a real test payment that fires the events.
+
+## Stage 5: Worker with retries
+
+**Why compute the order status instead of setting it per event?**
+Stripe doesn't promise delivery order, and retries can run minutes later. If each event set a status ("refunded", then "paid" arriving late), the last one to run would win, even when it's stale. Computing the status from all the order's payments and refunds gives the same answer whatever the order of events. It is also a pure function, so every case has a unit test.
+
+**Why does an expired order stay expired?**
+When a checkout session expires, Stripe can also cancel its payment intent. If the cancellation is processed after the expiry, a status built only from payments would see "nothing paid, nothing failed" and go back to `PENDING`. The expiry is an input to the calculation, and it only gives way when money was actually paid.
+
+**Why fetch the object from Stripe instead of using the event's copy?**
+The event body is a snapshot from when it was created. By the time the job runs, the payment may have moved on: a declined card retried successfully, a refund added. Fetching the current object means the database always ends up matching Stripe, whatever order the events arrive in. The event only tells the worker what to look at.
+
+**Why lock the order row?**
+Two jobs for the same order can run at the same time, for example the payment and a quick refund. Each reads the payments and refunds, computes a status and writes it; without a lock, the slower one can overwrite the other with a status computed from stale rows. `SELECT ... FOR UPDATE` makes the second transaction wait until the first commits. Stripe is called before the transaction, so the lock is held for milliseconds, not for a network call.
+
+**Which errors are retried and which are not?**
+Retried: the database being down, network errors, Stripe rate limits and Stripe server errors, because they pass. Not retried: an event with no matching order, an amount or currency that doesn't match the order, or Stripe saying the object doesn't exist. Retrying those would fail five times in a row and hide the real problem, so they fail at once with the reason saved for someone to look at.
+
+**How do you know which attempt is the last one?**
+BullMQ's `attemptsMade` counts the attempts that already failed, so the running attempt is `attemptsMade + 1`; when that equals the job's `attempts` (5), no retry follows and the event is marked `FAILED`. A test makes the database fail on every attempt and checks the event ends `FAILED` with `attempts = 5`; counting off by one makes that test fail.
+
+**Why can the worker be switched off?**
+The API must answer Stripe fast, while the worker can be slow and retry. Running them as separate processes (same code, `WORKER_ENABLED=false` for the API) means a backlog of jobs never slows the webhook, and each can be scaled or restarted on its own. Stage 8's Docker Compose starts both.
+
+**Show me the retries working.**
+With the database stopped, the worker's jobs failed and BullMQ scheduled them again after 10 s and 20 s. When PostgreSQL came back, the next attempt finished the work: payment recorded, order `PAID`, event `PROCESSED` with `attempts = 4`. Nothing was lost because the event was already stored and the job was in Redis, not in the app's memory.
+
+**What if the database is still down on the last attempt?**
+The job fails in BullMQ, but the event can't be marked `FAILED` because the database is the problem; it stays `PENDING`. The failed job shows in the dashboard with a retry button (stage 6), and the daily reconciliation (stage 7) compares Stripe with the database and queues anything missed. Retries handle short outages; reconciliation handles the rest.

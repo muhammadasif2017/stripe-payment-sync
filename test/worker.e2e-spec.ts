@@ -1,0 +1,194 @@
+import { getQueueToken } from '@nestjs/bullmq';
+import { INestApplication, Logger } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import type { Job, Queue } from 'bullmq';
+import { AppModule } from './../src/app.module.js';
+import { PrismaService } from './../src/prisma/prisma.service.js';
+import { STRIPE_EVENTS_QUEUE, type StripeEventJob } from './../src/queue/queue.module.js';
+import { STRIPE_CLIENT } from './../src/stripe/stripe.module.js';
+import { WorkerModule } from './../src/worker/worker.module.js';
+
+// Runs a real BullMQ worker on the test Redis and the test database, with a fake Stripe client.
+// WORKER_ENABLED is false for the e2e suite, so this file adds the worker module itself.
+describe('Stripe events worker (e2e)', () => {
+  const run = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const orderIds: string[] = [];
+  const eventIds: string[] = [];
+  const paymentIntents = new Map<string, object>();
+  const retrievePaymentIntent = vi.fn((id: string) => Promise.resolve(paymentIntents.get(id)));
+  let app: INestApplication;
+  let prisma: PrismaService;
+  let queue: Queue<StripeEventJob>;
+  let n = 0;
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule, WorkerModule] })
+      .overrideProvider(STRIPE_CLIENT)
+      .useValue({ paymentIntents: { retrieve: retrievePaymentIntent } })
+      .compile();
+    app = moduleRef.createNestApplication();
+    await app.init();
+    prisma = app.get(PrismaService);
+    queue = app.get<Queue<StripeEventJob>>(getQueueToken(STRIPE_EVENTS_QUEUE));
+    await queue.obliterate({ force: true });
+  });
+
+  beforeEach(() => {
+    // Failures are logged on purpose; keep the output readable.
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    retrievePaymentIntent.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterAll(async () => {
+    await prisma?.payment.deleteMany({ where: { orderId: { in: orderIds } } });
+    await prisma?.order.deleteMany({ where: { id: { in: orderIds } } });
+    await prisma?.stripeEvent.deleteMany({ where: { id: { in: eventIds } } });
+    await queue?.obliterate({ force: true });
+    await app?.close();
+  });
+
+  /** A PENDING order, a succeeded payment intent for it, and a stored event pointing at it. */
+  async function paidOrderEvent(metadata?: Record<string, string>) {
+    const order = await prisma.order.create({
+      data: { courseId: 'nestjs-fundamentals', amount: 4900, currency: 'usd' },
+    });
+    orderIds.push(order.id);
+    const piId = `pi_test_${run}_${++n}`;
+    paymentIntents.set(piId, {
+      id: piId,
+      amount: 4900,
+      amount_received: 4900,
+      currency: 'usd',
+      status: 'succeeded',
+      last_payment_error: null,
+      metadata: metadata ?? { order_id: order.id },
+    });
+    const eventId = `evt_test_${run}_${n}`;
+    eventIds.push(eventId);
+    await prisma.stripeEvent.create({
+      data: {
+        id: eventId,
+        type: 'payment_intent.payment_failed',
+        payload: { id: eventId, data: { object: { id: piId } } },
+        stripeCreatedAt: new Date(),
+      },
+    });
+    return { orderId: order.id, eventId };
+  }
+
+  /** Adds the job like the webhook does, but with a 50 ms backoff so retries don't take minutes. */
+  const enqueue = (eventId: string) =>
+    queue.add(
+      'stripe-event',
+      { eventId },
+      { jobId: eventId, attempts: 5, backoff: { type: 'fixed', delay: 50 } },
+    );
+
+  /** Waits until the job has completed or failed for good. */
+  async function settled(eventId: string): Promise<Job<StripeEventJob>> {
+    for (let i = 0; i < 200; i++) {
+      const state = await queue.getJobState(eventId);
+      // Read the job only after it has finished; a copy read earlier can miss the last attempt.
+      if (state === 'completed' || state === 'failed') return (await queue.getJob(eventId))!;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`Job ${eventId} did not finish within 10 seconds`);
+  }
+
+  it('processes an event: payment recorded, order PAID, event PROCESSED on attempt 1', async () => {
+    const { orderId, eventId } = await paidOrderEvent();
+
+    await enqueue(eventId);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('completed');
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status).toBe('PAID');
+    expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
+      status: 'PROCESSED',
+      attempts: 1,
+    });
+  });
+
+  it('retries after a database failure and completes on the next attempt', async () => {
+    const { orderId, eventId } = await paidOrderEvent();
+    vi.spyOn(prisma, '$transaction').mockRejectedValueOnce(new Error('Connection refused'));
+
+    await enqueue(eventId);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('completed');
+    // Once a job has finished, attemptsMade counts every attempt, the successful one included.
+    expect(job.attemptsMade).toBe(2);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status).toBe('PAID');
+    expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
+      status: 'PROCESSED',
+      attempts: 2,
+      lastError: null,
+    });
+  });
+
+  it('logs a failure to load the event (database down) and retries', async () => {
+    const { orderId, eventId } = await paidOrderEvent();
+    vi.spyOn(prisma.stripeEvent, 'findUnique').mockRejectedValueOnce(
+      new Error('Connection refused'),
+    );
+
+    await enqueue(eventId);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('completed');
+    expect(Logger.prototype.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`Event ${eventId} failed on attempt 1, will retry`),
+    );
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status).toBe('PAID');
+  });
+
+  it('gives up after 5 failed attempts and marks the event FAILED with the error', async () => {
+    const { orderId, eventId } = await paidOrderEvent();
+    vi.spyOn(prisma, '$transaction').mockRejectedValue(new Error('Connection refused'));
+
+    await enqueue(eventId);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('failed');
+    expect(job.attemptsMade).toBe(5);
+    expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
+      status: 'FAILED',
+      attempts: 5,
+      lastError: 'Error: Connection refused',
+    });
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status).toBe(
+      'PENDING',
+    );
+  });
+
+  it('fails a permanent error at once, without retries', async () => {
+    const { eventId } = await paidOrderEvent({}); // no order_id, like a `stripe trigger` event
+
+    await enqueue(eventId);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('failed');
+    expect(job.attemptsMade).toBe(1);
+    const event = await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } });
+    expect(event).toMatchObject({ status: 'FAILED', attempts: 1 });
+    expect(event.lastError).toContain('no valid order_id');
+  });
+
+  it('skips an event that is already PROCESSED without calling Stripe', async () => {
+    const { eventId } = await paidOrderEvent();
+    await prisma.stripeEvent.update({ where: { id: eventId }, data: { status: 'PROCESSED' } });
+
+    await enqueue(eventId);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('completed');
+    expect(retrievePaymentIntent).not.toHaveBeenCalled();
+  });
+});

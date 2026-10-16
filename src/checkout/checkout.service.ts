@@ -71,6 +71,9 @@ export class CheckoutService {
           mode: 'payment',
           // Card only: the data model has no state for bank debits that take days to settle.
           allowed_payment_method_types: ['card'],
+          // One currency only: without this, Checkout offers local currencies (e.g. PKR) and the
+          // payment no longer matches the order's amount and currency.
+          adaptive_pricing: { enabled: false },
           line_items: [
             {
               quantity: 1,

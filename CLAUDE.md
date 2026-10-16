@@ -13,7 +13,7 @@ NestJS 12 (ES modules), TypeScript strict, Prisma 7.10.0 with `@prisma/adapter-p
 ## Commands
 
 - Start databases: `docker compose up -d` (PostgreSQL on 5435, Redis on 6380, both 127.0.0.1 only)
-- Dev server: `npm run start:dev`
+- Dev server: `npm run start:dev` (API and worker; `WORKER_ENABLED=false` for API only)
 - Unit tests: `npm test`
 - e2e tests: `npm run test:e2e` (needs the databases; runs against `payments_test`)
 - Lint / types / build: `npm run lint`, `npm run typecheck`, `npm run build`

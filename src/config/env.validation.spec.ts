@@ -58,6 +58,15 @@ describe('validateEnv', () => {
     },
   );
 
+  it('runs the worker by default and reads WORKER_ENABLED=false as off', () => {
+    expect(validateEnv(validEnv).WORKER_ENABLED).toBe(true);
+    expect(validateEnv({ ...validEnv, WORKER_ENABLED: 'false' }).WORKER_ENABLED).toBe(false);
+  });
+
+  it('rejects a WORKER_ENABLED that is not true or false', () => {
+    expect(() => validateEnv({ ...validEnv, WORKER_ENABLED: 'flase' })).toThrow('WORKER_ENABLED');
+  });
+
   it('does not put secret values in the error message', () => {
     const run = () => validateEnv({ ...validEnv, STRIPE_SECRET_KEY: 'sk_live_supersecret' });
 

@@ -1,51 +1,76 @@
-# Implementation Plan: Stage 4 – Webhook Endpoint
+# Implementation Plan: Stage 5 – Worker with Retries
 
 ## Overview
 
-Stage 4 receives Stripe's webhooks (see `PROJECT.md`, stage 4). `POST /webhooks/stripe` checks the Stripe signature against the raw request body, stores the event once in `stripe_events`, adds a BullMQ job whose job ID is the event ID, and answers 200 straight away. No processing happens in the request: the worker that updates orders, payments and refunds is stage 5, so jobs wait in the queue until then.
+Stage 5 processes the queued Stripe events (see `PROJECT.md`, stage 5). A BullMQ worker takes each job, fetches the latest version of the object from Stripe, updates the order, payment or refund in one database transaction, and marks the event processed. A failed attempt saves the error on the event and is retried: 5 attempts with exponential backoff (already set on the queue in stage 4).
 
-**Done when (from `PROJECT.md`):** `stripe listen --forward-to localhost:3000/webhooks/stripe` plus `stripe trigger checkout.session.completed` saves 1 event and 1 job, and a wrong signature returns 400.
+**Done when (from `PROJECT.md`):** you stop PostgreSQL while a job runs, start it again, and the job completes on a retry.
 
-Stage 1–3 plans and tasks are archived in `tasks/archive/`.
+Stage 1–4 plans and tasks are archived in `tasks/archive/`.
 
 ## Flow
 
 ```
-Stripe ──POST /webhooks/stripe──> verify signature (raw body + STRIPE_WEBHOOK_SECRET)
-                                     │ bad / missing ──> 400, nothing saved
-                                     │ live-mode event ──> 400, nothing saved
-                                     │ type not handled ──> 200, nothing saved
-                                     v
-                                  INSERT stripe_events (id = evt_...)
-                                     │ already there (P2002) ──> fine, continue
-                                     v
-                                  queue.add('stripe-events', { eventId }, { jobId: eventId })
-                                     v
-                                  200 { received: true }
+job { eventId } ──> load stripe_events row ──> already PROCESSED? done (idempotent)
+                        │
+                        v
+                    fetch latest object from Stripe (outside the transaction)
+                        │  session / payment intent / refunds
+                        v
+                    BEGIN
+                      lock the order row (SELECT ... FOR UPDATE)
+                      upsert payment / refunds by their Stripe IDs
+                      recompute the order status from its payments and refunds
+                      event: PROCESSED, attempts + 1, processed_at
+                    COMMIT
+   on error ──> event: attempts + 1, last_error; FAILED after the last attempt
+                rethrow, so BullMQ retries (10 s, 20 s, 40 s, 80 s)
+                permanent errors (no matching order, wrong currency) fail at once
 ```
+
+## What each event does
+
+| Event | Fetches | Writes |
+| --- | --- | --- |
+| `checkout.session.completed` | session with its payment intent | payment from the payment intent; order status recomputed |
+| `checkout.session.expired` | session | order marked expired; status recomputed |
+| `payment_intent.payment_failed` | payment intent | payment from the payment intent; status recomputed |
+| `payment_intent.canceled` | payment intent | payment from the payment intent; status recomputed |
+| `charge.refunded`, `refund.updated` | payment intent and all its refunds (every page) | payment and refunds upserted; status recomputed |
+
+The event type only says what to fetch. What is written always comes from the fetched object: a `payment_intent.payment_failed` job that runs after the customer retried and paid finds the payment intent `succeeded` and records a successful payment. The order is found from `metadata.order_id` (set in stage 3 on both the session and the payment intent).
 
 ## Architecture Decisions
 
-- **The signature is checked on the raw body.** Stripe signs the exact bytes it sent. If NestJS parses the JSON first and the code re-serialises it, spacing or key order can differ and every signature fails. NestJS's `rawBody: true` option keeps the original bytes next to the parsed body. `constructEvent` also rejects signatures older than 5 minutes, which stops replayed requests.
-- **Store first, then enqueue, then answer 200.** The webhook only records the event; the worker does the work. Stripe gets its answer in milliseconds, and a slow database or Stripe API in stage 5 becomes a retry instead of a webhook timeout.
-- **Duplicates are handled twice over.** The event ID is the primary key, so a second delivery can't insert a second row (`P2002`, treated as success). The job ID is the event ID, so BullMQ ignores a second `add` while the job exists.
-- **Every failure before the 200 makes Stripe retry.** If the insert or the enqueue fails, the endpoint answers 500 and Stripe redelivers later (for up to 3 days). On redelivery the row already exists, the insert is skipped, and the enqueue runs again. Nothing is lost between the two writes.
-- **Only event types the worker handles are stored** (see decision 1). Others get 200 and are dropped, so Stripe stops sending them.
-- **Live-mode events are refused (400).** The project is test mode only, like the `sk_test_` check at startup.
-- **Queue settings are set now, because jobs are created now:** 5 attempts with exponential backoff (the stage 5 requirement), completed jobs kept for 7 days so a late duplicate still finds its job ID, failed jobs kept for the dashboard in stage 6.
-- **BullMQ 6.3.10 and `@nestjs/bullmq` 12.0.0**, pinned. BullMQ 6 no longer bundles a Redis client, so `ioredis` is installed too. Code is written from the installed types, not from memory of BullMQ 5.
-- **Tests use their own Redis database** (`TEST_REDIS_URL`, database 1 in the same container), with the same guard as the test PostgreSQL database. Tests sign their own payloads with `stripe.webhooks.generateTestHeaderString`, so they need no network and no Stripe CLI.
-- **The Stripe CLI always runs with the test key from `.env`** (`STRIPE_API_KEY`). Your CLI login defaults to live mode, and nothing here may touch live mode. The webhook secret printed by `stripe listen` goes into `.env` without being shown in the chat.
+- **Fetch the latest object instead of trusting the event body.** Stripe doesn't guarantee delivery order, and a retried job may run minutes later. The current object from the API is the truth; the event only says what to look at. This also makes processing the same event twice harmless.
+- **The order status is computed, not stepped.** A pure function derives it from the order's payments, refunds and whether its checkout expired (refunded total vs paid amount; `EXPIRED` sticks unless money was paid, so a `payment_intent.canceled` arriving after `checkout.session.expired` can't turn the order back to `PENDING`). Events arriving in any order converge to the same result, and the function is easy to unit-test. These mapping functions are the "unit tests for the mapping functions" in `PROJECT.md`.
+- **One transaction per event, with the order row locked.** Payment, refunds, order status and the event's `PROCESSED` mark commit together or not at all. `SELECT ... FOR UPDATE` on the order stops two jobs for the same order (say, `checkout.session.completed` and `charge.refunded`) from computing the status from stale rows at the same time. Stripe calls happen before the transaction, so no lock is held during network calls.
+- **Idempotent at three levels:** the event is skipped when already `PROCESSED`; payments and refunds are upserted on their unique Stripe IDs; the order status is recomputed from scratch.
+- **Retryable vs permanent errors.** A database outage, a network error, a Stripe rate limit (429) or a Stripe server error is retried. A missing order, a currency or amount that doesn't match the order, or a Stripe invalid-request error (such as an object that doesn't exist) can't succeed on a retry, so it fails at once (BullMQ `UnrecoverableError`) and the event is marked `FAILED` with the reason, for the dashboard in stage 6.
+- **Errors are saved on each failure** (`attempts`, `last_error`), as the brief requires. If the database itself is down, saving the error fails too; that is logged and BullMQ still retries.
+- **Refunds can never add up to more than the payment.** Checked in the transaction (promised in stage 2); a mismatch is a permanent error.
+- **Worker runs inside the app for now, behind a `WORKER_ENABLED` setting** (default `true`). Stage 8's Docker Compose can then start the same image twice: API with the worker off, worker with it on. Concurrency 5. The e2e tests turn it off (and use a dummy Stripe key), so no test can reach the real Stripe API; only the worker's own e2e file starts it, with a fake Stripe client.
 
-## Decision for you
+## Decisions for you
 
-1. **Store only handled event types? (recommended: yes)** The allowlist: `checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`, `payment_intent.canceled`, `charge.refunded`, `refund.updated`. These are the events that change an order, payment or refund. The alternative is to store every event as an audit log; then `stripe trigger checkout.session.completed` saves about 6 events (product, price, payment intent, charge...), not the 1 the "Done when" expects.
+1. **Turn off Adaptive Pricing in Checkout? (recommended: yes)** Stage 4 showed Stripe offering the buyer PKR. Multiple currencies are out of scope, so the session gets `adaptive_pricing: { enabled: false }` and always charges the catalog price in USD. The worker still checks currency and amount against the order and fails the event if they differ.
+2. **`WORKER_ENABLED` switch now? (recommended: yes)** It costs one setting and lets the manual "Done when" run the worker as its own process, the way stage 8 will.
+
+## The "Done when" check
+
+1. Run the API with `WORKER_ENABLED=false` and `stripe listen`; make a test payment. The event is stored and its job waits.
+2. Stop PostgreSQL (`docker compose stop postgres`).
+3. Start a worker process (`WORKER_ENABLED=true`, another port). The job fails, the error is logged, BullMQ schedules a retry.
+4. Start PostgreSQL. The next retry completes: payment `SUCCEEDED`, order `PAID`, event `PROCESSED` with `attempts` > 1.
+
+Checked before planning: the app starts while PostgreSQL is stopped (`/health` answers 503), so step 3 works as written.
 
 ## Risks
 
-- **BullMQ 6 is a new major version** (July 2026). If its NestJS integration misbehaves, fall back to BullMQ 5 (the last 5.x is mature and supported by `@nestjs/bullmq` 12).
-- **Jobs pile up until stage 5.** Expected; they are processed when the worker exists.
-- **`STRIPE_WEBHOOK_SECRET` from `stripe listen` is per CLI session.** It stays the same between runs on the same machine, but a deployed endpoint has a different secret from the Stripe dashboard.
+- **Two events from stage 4 are waiting in the dev queue.** The one from `stripe trigger` has no `order_id`, so it will fail permanently with "no matching order". That is correct behaviour and a useful dashboard example in stage 6.
+- **Stripe API shapes in version `2026-09-30.endive`** (for example how refunds are listed) are taken from the installed types, not from memory. Refunds are listed with the library's auto-pagination, not just the first page.
+- **The stage 3 unit test asserts the exact Checkout Session parameters,** so adding `adaptive_pricing` changes it on purpose.
+- **What BullMQ 6 puts in `attemptsMade` while a job runs** decides when the last attempt is detected; read from the installed types and covered by a test.
 
 ## Task List
 

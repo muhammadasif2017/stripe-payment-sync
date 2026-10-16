@@ -1,5 +1,5 @@
 import { Module, ValidationPipe } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConditionalModule, ConfigModule } from '@nestjs/config';
 import { APP_PIPE } from '@nestjs/core';
 import { CheckoutModule } from './checkout/checkout.module.js';
 import { validateEnv } from './config/env.validation.js';
@@ -8,6 +8,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
 import { QueueModule } from './queue/queue.module.js';
 import { StripeModule } from './stripe/stripe.module.js';
 import { WebhooksModule } from './webhooks/webhooks.module.js';
+import { WorkerModule } from './worker/worker.module.js';
 
 @Module({
   imports: [
@@ -18,6 +19,8 @@ import { WebhooksModule } from './webhooks/webhooks.module.js';
     HealthModule,
     CheckoutModule,
     WebhooksModule,
+    // The worker runs unless WORKER_ENABLED=false: one image can then run as the API, the worker or both.
+    ConditionalModule.registerWhen(WorkerModule, 'WORKER_ENABLED'),
   ],
   providers: [
     // Registered here rather than in main.ts so e2e tests, which build the app from this module, get it too.
