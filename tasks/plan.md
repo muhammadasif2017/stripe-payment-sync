@@ -1,94 +1,74 @@
-# Implementation Plan: Stage 7 – Daily Reconciliation
+# Implementation Plan: Stage 7 Follow-up – Closing Reconciliation's Known Limits
 
 ## Overview
 
-Stage 7 is the safety net behind the webhook (see `PROJECT.md`, stage 7). Once a day, a scheduled job lists the Checkout Sessions Stripe completed in the last 2 days, finds the paid ones whose payment is missing from the database, and queues a repair for each. The repair fetches the session from Stripe and writes the payment, its refunds and the order status, through the same code the worker uses for events.
+Stage 7 shipped with three known limits, listed in the README. This follow-up closes them in one small PR, before stage 8:
 
-**Done when (from `PROJECT.md`):** you delete a payment row, run the job, and the row comes back.
+1. **A repair fixes the payment, not the event history.** An event that got stuck stays `PENDING` or `FAILED`, and its job stays in the dashboard's Failed list.
+2. **A paid session that doesn't match its order fails its repair every day**, adding a new failed job each time.
+3. **Schedule edits on the dashboard are undone** at the next worker start.
 
-Stage 1–6 plans and tasks are archived in `tasks/archive/`.
+Stage 1–7 plans and tasks are archived in `tasks/archive/`.
 
-## Flow
+## 1. Repairs resolve the events they cover
 
-```
-every day 03:00 UTC (BullMQ job scheduler, queue "reconciliation")
-  or "Run now" on the dashboard
-        │
-        v
-list Checkout Sessions: status=complete, created in the last 2 days (every page, each page logged)
-        │
-        v
-keep sessions with payment_status=paid and a valid order_id that exists in the database
-        │
-        v
-one query: which of their payment intents have a SUCCEEDED payment row?
-        │
-        v
-for each one without: queue job "reconcile-session" { sessionId } on "stripe-events"
-        │                                    (job ID unique per run)
-        v
-log one summary line: checked, skipped, missing, queued
+When a repair writes a payment, the events about that payment are now settled too.
 
-worker, "reconcile-session" job:
-  fetch session (with its payment intent) and the payment intent's refunds
-  BEGIN; lock order; upsert payment and refunds; recompute order status; COMMIT
-  (no stripe_events row involved; retries and dashboard work as for events)
-```
+- **Which events:** status `PENDING` or `FAILED`, whose `data.object.id` is the repaired session or its payment intent, or whose `data.object.payment_intent` is that payment intent. That last condition covers `charge.refunded` and `refund.updated`, and the repair writes the refunds too.
+- **New status `RECONCILED`,** not `PROCESSED`. The history then says a repair settled the event, not the event itself. `last_error` and `attempts` stay as they were, as a record of what went wrong.
+- **Same transaction as the repair.** Payment, refunds, order status and the events' new status commit together or not at all.
+- **Index.** A hand-written partial index on `stripe_events (status) WHERE status <> 'PROCESSED'`. Almost every row is `PROCESSED`, so the index stays tiny, and the lookup only reads the few unsettled rows before checking their JSON. Stage 2 deferred a status index "until a query needs it"; this is that query.
+- **The dashboard's Failed list.** After the transaction commits, each settled event's failed job (job ID = event ID) is removed from Redis (decision 1). The error stays on the event row.
+- **The processor** skips `RECONCILED` events like `PROCESSED` ones, so a late redelivery or a manual retry changes nothing.
 
-## Why not re-queue the original Stripe event
+## 2. A repair that can't succeed becomes one recorded issue
 
-It looks simpler, but it can't work. A completed job stays in Redis for 7 days, and adding a job whose ID already exists is silently ignored. Even if the job ran, the processor skips events already marked `PROCESSED`. And the original event may be missing altogether: that is one of the cases reconciliation exists for. So repairs are their own job type, keyed by the Checkout Session, with nothing depending on `stripe_events`.
+- **New table `reconciliation_issues`:**
 
-## What counts as missing
+  | Column | Meaning |
+  | --- | --- |
+  | `stripe_checkout_session_id` | unique |
+  | `order_id` | nullable |
+  | `reason` | the repair's error message |
+  | `first_seen_at`, `last_seen_at` | |
+  | `resolved_at` | null while open |
 
-A session is repaired when Stripe says it is `complete` and `paid`, and the database has **no `SUCCEEDED` payment** for its payment intent. One rule covers:
+- **Recorded by the worker:** when a `reconcile-session` repair fails with a permanent error (amount or currency mismatch, unknown order, session Stripe doesn't know), the processor upserts an open issue for that session. A failure to save the issue is logged and never replaces the original error, the same rule as stage 5's error recording.
+- **Read by reconciliation:** sessions with an open issue are skipped and counted as `openIssues` in the summary. Every run with open issues also logs a warning: `N open reconciliation issues need review`. One failed job and one row per problem, then silence apart from that daily reminder.
+- **Resolving:** set `resolved_at`. The next run then tries the session again; if it still fails, the issue reopens with a new `last_seen_at`. This is SQL for now. A dashboard or endpoint for it is out of scope.
+- **Not issues:** sessions without an order ID (`stripe trigger` tests) stay a plain skip count, as today.
 
-- a deleted payment row (the "Done when"),
-- a webhook that never arrived, or an event that never got processed,
-- stage 5's known limit: the database was down on the 5th attempt, so the event stayed `PENDING` with no payment,
-- a stale row (`FAILED` in the database, `succeeded` at Stripe).
+## 3. The schedule is changed only through `RECONCILIATION_CRON`
 
-Skipped and counted, not queued: sessions without a valid `order_id` (such as the stage 4 `stripe trigger` session, which is still inside the 2-day window), and sessions whose order isn't in the database. Queuing those would fail permanently on every run.
+- A third check in the dashboard's guard, after the login and the cross-site check, refuses Bull Board's two scheduler-changing routes with `403` and the message "Change RECONCILIATION_CRON instead". The routes, read from Bull Board's route list in stage 7:
+  - `PATCH /api/queues/:queue/job-schedulers/:id` (Edit schedule)
+  - `PUT /api/queues/:queue/job-schedulers/:id/remove` (Remove scheduler)
+- **Run now** (`PUT .../job-schedulers/:id/run`) stays allowed.
+- The buttons stay visible, because Bull Board can't hide single buttons; clicking them shows the error.
 
 ## Architecture Decisions
 
-- **BullMQ job scheduler, not `@nestjs/schedule`.** The schedule lives in Redis. When several worker processes run, only one of them takes each run, and a run missed during a restart still happens. `upsertJobScheduler` is idempotent, so every worker can register it at startup. It also appears in Bull Board, which has a **Run now** button for schedulers.
-- **A separate `reconciliation` queue for the scheduled run.** A scheduler keeps its next run waiting as a delayed job. On its own queue that job can't mix with Stripe events, their counts or the stage 6 tests. The queue is registered in `QueueModule`, so the API-only process and the dashboard see it; the scheduler and its processor (concurrency 1) live in `WorkerModule`.
-- **Repairs go to the existing `stripe-events` queue**, as a second job name, `reconcile-session`. They get the same 5 attempts with backoff, the same worker and the same dashboard. The processor dispatches on `job.name`; an unknown name or missing data is an `UnrecoverableError` (Bull Board's "add job" can create any job, as stage 6 showed).
-- **Job ID `reconcile-<sessionId>-<run timestamp>`.** Unique per run, so running reconciliation twice in a day repairs twice instead of being ignored as a duplicate. Applying a session is idempotent, so a duplicate is harmless. Read from the installed BullMQ: custom IDs can't be integers and can't contain `:`, so the parts are joined with `-`.
-- **One code path for events and repairs.** The handler's transaction is split from how the snapshot was fetched. Events still mark their `stripe_events` row `PROCESSED` in the same transaction; repairs have no row, so that write is skipped. Failure recording works the same way: a repair job has no event row to save the error on, so its errors live in the job (visible in the dashboard) and the log.
-- **Repairs bring refunds back too.** The repair fetches the session with its payment intent and all of the payment intent's refunds. A restored payment therefore comes back with the right refunded total and order status.
-- **Window in Unix seconds.** Stripe's `created` filter takes seconds: `gte: floor(now / 1000) - 2 × 86 400`. `now` is a parameter, so a test can pin the window. Sessions are listed page by page through `StripeCalls` (`job=reconciliation` in the log), with a page limit like refunds.
+- **`RECONCILED` instead of reusing `PROCESSED`.** "The worker processed it" and "a repair made it right" are different facts, and the difference is what an audit or a debugging session needs.
+- **Issues in the database, not only in Redis.** Failed jobs are pruned, can be removed from the dashboard, and live in another store. A row next to the orders is easy to query, join and keep.
+- **Guard in code, not in Bull Board settings.** Bull Board's read-only mode would also hide Retry and Run now.
 
 ## Decisions for you
 
-1. **Schedule: daily at 03:00 UTC, as a setting `RECONCILIATION_CRON` with that default? (recommended: yes)** A setting lets stage 8's deployment change it without a code change; validated at startup, so a bad cron pattern stops the app.
-2. **Manual trigger: the dashboard's "Run now" on the scheduler? (recommended: yes)** No new endpoint to secure; it is already behind the stage 6 login and the cross-site check. The alternative is a `POST /admin/reconcile` endpoint, which would need the same protection.
-3. **The "Done when" deletes one row in your development database.** This is destructive, so here is the exact command for your approval. It removes the stage 6 test payment (no refunds, so `ON DELETE RESTRICT` doesn't block it):
+1. **Remove a settled event's failed job from the dashboard? (recommended: yes)** The Failed list then means "needs attention". The error stays on the event row. The alternative is to leave it there, marked settled only in the database.
+2. **Manual check in your development database? (recommended: yes)** The e2e tests cover every case, but a real run shows it end to end. It changes your data again, so here are the exact commands. They use the stage 6 payment and its event `evt_1UR5EiGImTS0y0GhR9DZONIG`, which has no refunds:
 
    ```sql
-   -- saved first, to compare after the repair
-   SELECT * FROM payments WHERE stripe_payment_intent_id = 'pi_3UR5EgGImTS0y0Gh01L7xMXK';
+   UPDATE stripe_events SET status = 'FAILED' WHERE id = 'evt_1UR5EiGImTS0y0GhR9DZONIG';
    DELETE FROM payments WHERE stripe_payment_intent_id = 'pi_3UR5EgGImTS0y0Gh01L7xMXK';
    ```
 
-   The restored row gets a new UUID and new timestamps. It is compared by payment intent ID, amount, currency and status, plus the order's status.
-
-## The "Done when" check
-
-1. Run the API and a worker. Save the payment row above, then delete it.
-2. Open `/admin/queues`, queue `reconciliation`, and click **Run now** on the scheduler.
-3. The log shows `checkout.sessions.list job=reconciliation ...` lines and a summary with 1 missing, 1 queued; the stage 4 `stripe trigger` session is counted as skipped.
-4. A `reconcile-session` job completes on `stripe-events`. The payment row is back: same payment intent, 4900 cents, `usd`, `SUCCEEDED`; the order is still `PAID`.
-5. Run it again: 0 missing, nothing queued.
+   Then **Run now**. Expected: the payment comes back, and the event becomes `RECONCILED`. The schedule-edit refusal is checked against the running app with curl; no data change is needed for that.
 
 ## Risks
 
-- **Sessions older than 2 days aren't checked.** That is the brief's window. An outage longer than that needs a wider manual run; the window could become a job option later.
-- **A paid session whose order was deleted** is skipped and logged, never recreated: orders are created by checkout, not by Stripe.
-- **The scheduler's delayed job and e2e cleanup.** Tests must remove the scheduler and empty the `reconciliation` queue afterwards; whether `obliterate` removes schedulers is checked in task 3.
-- **The stage 6 admin test expects exactly one queue** on the dashboard. It changes to two, on purpose.
-- **`payment_status: paid` covers card payments.** A method that settles later would show `unpaid` at completion and `paid` later; reconciliation would then catch it within the 2-day window. That is the safety net stage 5 promised.
+- **Adding an enum value in PostgreSQL** (`ALTER TYPE ... ADD VALUE`) can't be used in the same transaction that adds it. Prisma runs each migration in its own transaction and the code uses the value only afterwards, so this is fine. Checked by applying the migration to the test database and to a throwaway database.
+- **Matching events by JSON.** The payload is Stripe's event as received. Refund events carry `payment_intent` as a string in API version `2026-09-30.endive`, which the handler already relies on.
+- **The README's known-limits list shrinks.** The three items are replaced by how each case is now handled.
 
 ## Task List
 

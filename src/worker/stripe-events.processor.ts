@@ -1,6 +1,6 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
-import { Job, UnrecoverableError } from 'bullmq';
+import { Job, type Queue, UnrecoverableError } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   RECONCILE_SESSION_JOB,
@@ -30,6 +30,7 @@ export class StripeEventsProcessor extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
     private readonly handler: StripeEventHandler,
+    @InjectQueue(STRIPE_EVENTS_QUEUE) private readonly queue: Queue,
   ) {
     super();
   }
@@ -68,8 +69,8 @@ export class StripeEventsProcessor extends WorkerHost {
     if (!event) {
       throw new UnrecoverableError(`Event ${eventId} is not in stripe_events`);
     }
-    if (event.status === 'PROCESSED') {
-      this.logger.log(`Event ${eventId} was already processed; nothing to do`);
+    if (event.status === 'PROCESSED' || event.status === 'RECONCILED') {
+      this.logger.log(`Event ${eventId} was already ${event.status.toLowerCase()}; nothing to do`);
       return;
     }
 
@@ -94,8 +95,12 @@ export class StripeEventsProcessor extends WorkerHost {
     maxAttempts: number,
   ): Promise<void> {
     try {
-      await this.handler.reconcileSession(sessionId);
-      this.logger.log(`Repaired Checkout Session ${sessionId} (attempt ${attempt})`);
+      const settled = await this.handler.reconcileSession(sessionId);
+      this.logger.log(
+        `Repaired Checkout Session ${sessionId} (attempt ${attempt})` +
+          (settled.length ? `; marked RECONCILED: ${settled.join(', ')}` : ''),
+      );
+      await this.clearFailedJobs(settled);
     } catch (error) {
       const permanent = error instanceof PermanentProcessingError;
       const final = permanent || attempt >= maxAttempts;
@@ -107,6 +112,27 @@ export class StripeEventsProcessor extends WorkerHost {
         throw new UnrecoverableError(error.message);
       }
       throw error;
+    }
+  }
+
+  /**
+   * Removes the failed jobs of events a repair settled, so the dashboard's Failed list only shows what
+   * still needs attention. The error stays on the event row. Runs after the repair committed; a
+   * failure here is logged and doesn't fail the repair.
+   * @param eventIds Settled events; an event's job ID is its event ID.
+   */
+  private async clearFailedJobs(eventIds: string[]): Promise<void> {
+    for (const eventId of eventIds) {
+      try {
+        const job = await this.queue.getJob(eventId);
+        if (job && (await job.getState()) === 'failed') {
+          await job.remove();
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Could not remove the failed job of event ${eventId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
 

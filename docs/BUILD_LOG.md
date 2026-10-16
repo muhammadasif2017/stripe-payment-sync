@@ -270,3 +270,19 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - A second run: `0 missing and queued, 4 already recorded`. The same "Run now" request sent with `Origin: https://evil.example` got 403.
   - The development Redis keeps the `daily-reconciliation` scheduler, as intended: the next worker start finds it and updates it.
 - Task 4: 147 unit tests and 87 e2e tests pass; lint, type check and build are clean.
+
+## Stage 7 follow-up: closing reconciliation's known limits (2026-10-16)
+
+### What was built
+
+- **Task 1: Repairs settle the events they cover.** Each change and why:
+  - `prisma/schema.prisma`, migration `reconciled_status_and_issues`: a new event status `RECONCILED`, meaning a reconciliation repair settled the event rather than the worker processing it. The same migration creates the `reconciliation_issues` table used by task 2.
+  - Migration `unsettled_events_index` (hand-written): a partial index on `stripe_events (status) WHERE status <> 'PROCESSED'`. Almost every row is `PROCESSED`, so the index holds only the few unsettled rows. Stage 2 deferred a status index until a query needed one; the repair's lookup is that query. `EXPLAIN` confirms PostgreSQL uses it. Prisma's schema language can't express a partial index; a probe migration created afterwards came out empty, so Prisma won't try to drop it.
+  - `src/worker/stripe-event-handler.ts`: in the repair's transaction, one `UPDATE ... RETURNING` marks `RECONCILED` every unsettled event whose `data.object.id` is the session or its payment intent, or whose `data.object.payment_intent` is that payment intent (charge and refund events). `last_error` and `attempts` stay as the record of what went wrong. `reconcileSession` returns the settled event IDs. A repair that fails rolls back and settles nothing.
+  - `src/worker/stripe-events.processor.ts`: after a repair commits, the failed job of each settled event (job ID = event ID) is removed, so the dashboard's Failed list shows only what still needs attention (decision 1). A failure to remove is logged and doesn't fail the repair. Events already `RECONCILED` are skipped like `PROCESSED` ones.
+  - Tests: `test/stripe-event-handler.e2e-spec.ts` (+2: a `FAILED` session event and a `PENDING` refund event of the payment become `RECONCILED` with their error kept, while a `PROCESSED` event and another payment's event are untouched; a failing repair settles nothing). `test/worker.e2e-spec.ts` (+2: a repair removes the settled event's failed job; a `RECONCILED` event is skipped without calling Stripe). The stage 7 test that asserted the old behaviour (a repaired payment's event stays `PENDING`) now expects `RECONCILED`, on purpose.
+
+### Verified
+
+- Task 1: 35 handler and worker e2e tests pass. Disabling the `UPDATE` fails 3 tests; skipping the job cleanup fails 1. All 8 migrations apply to an empty throwaway database (`payments_replay`, dropped afterwards), and the enum lists `RECONCILED`.
+

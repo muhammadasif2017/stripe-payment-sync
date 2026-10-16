@@ -248,3 +248,11 @@ Unix seconds. JavaScript dates are in milliseconds, and passing milliseconds wou
 **Show me reconciliation working.**
 A payment row was deleted from the development database, then "Run now" was pressed on the dashboard. The run listed 5 completed sessions from Stripe, found 2 paid sessions without a payment, and queued 2 repairs, which completed within a second. One was the deleted row. The other was a real gap nobody had planted: a test payment from before the webhook existed, whose order had sat at `PENDING` for a day. A second run found nothing missing. It is a good example of why the check exists: the webhook path had no way to know about that payment.
 
+## Stage 7 follow-up: closing the known limits
+
+**A repair fixed the payment. What happens to the event that got stuck?**
+In the same transaction, the repair marks the payment's unsettled events `RECONCILED`: a separate status, because "the worker processed it" and "a repair made it right" are different facts and an audit needs the difference. The original error and attempt count stay on the row. Afterwards the event's failed job is removed from the dashboard, so the Failed list only shows what still needs a person.
+
+**Why a partial index?**
+The repair looks for unsettled events of one payment. Nearly every row in `stripe_events` is `PROCESSED`, so a normal index on `status` would be large and mostly useless. A partial index (`WHERE status <> 'PROCESSED'`) holds only the handful of open rows, stays tiny as the table grows, and lets PostgreSQL skip the whole processed history before it reads any JSON.
+

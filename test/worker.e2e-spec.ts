@@ -317,11 +317,42 @@ describe('Stripe events worker (e2e)', () => {
     expect(await prisma.payment.findMany({ where: { orderId } })).toMatchObject([
       { amount: 4900, currency: 'usd', status: 'SUCCEEDED' },
     ]);
-    // The repair doesn't touch stripe_events: the stored event is still PENDING and unattempted.
+    // The stuck event for this payment is settled by the repair, keeping its attempt count.
     expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
-      status: 'PENDING',
+      status: 'RECONCILED',
       attempts: 0,
     });
+  });
+
+  it('a repair clears the failed job of the event it settles from the dashboard', async () => {
+    const { eventId, sessionId } = await missingPayment();
+    const outage = vi
+      .spyOn(prisma, '$transaction')
+      .mockRejectedValue(new Error('Connection refused'));
+    await enqueue(eventId);
+    expect(await (await settled(eventId)).getState()).toBe('failed');
+    outage.mockRestore();
+
+    const repair = await enqueueRepair(sessionId);
+    await settled(repair.id!);
+
+    expect(await queue.getJob(eventId)).toBeUndefined();
+    expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
+      status: 'RECONCILED',
+      attempts: 5,
+      lastError: 'Error: Connection refused',
+    });
+  });
+
+  it('skips a RECONCILED event without calling Stripe', async () => {
+    const { eventId } = await paidOrderEvent();
+    await prisma.stripeEvent.update({ where: { id: eventId }, data: { status: 'RECONCILED' } });
+
+    await enqueue(eventId);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('completed');
+    expect(retrievePaymentIntent).not.toHaveBeenCalled();
   });
 
   it('a reconcile-session job that fails once is retried and completes', async () => {
