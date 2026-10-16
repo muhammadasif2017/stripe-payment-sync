@@ -177,3 +177,20 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 
 - **Payment page options.** With Adaptive Pricing off the page shows $49.00 in USD only, but it also offered "Bank" and "Klarna" through Stripe Link, although the session is card-only (`payment_method_types: ["card"]`). Not tested. If a method that settles later were ever used, `checkout.session.completed` would arrive unpaid, no payment would be recorded and the order would stay `PENDING`; the daily reconciliation (stage 7) is the safety net, and `checkout.session.async_payment_succeeded` would need to be handled.
 - **Database down on the last attempt.** The event can't be marked `FAILED` if the database is still down at the 5th attempt; it stays `PENDING` while its job is failed in BullMQ. The failed job is visible in the dashboard (stage 6) and reconciliation (stage 7) catches the payment.
+
+## Stage 6: Logging and dashboard (2026-10-16)
+
+### What was built
+
+- **Task 1: Stripe call logging wrapper.** Each change and why:
+  - `src/stripe/stripe-calls.ts` (new): the brief asks for every Stripe call to be logged with the event ID, endpoint, status and duration. `StripeCalls.run(endpoint, context, call)` times one call and logs one line, such as `paymentIntents.retrieve event=evt_1 status=200 duration=213ms request=req_ok`. Failures are logged as warnings with the error type (`status=401 (StripeAuthenticationError)`), or `status=no response` when Stripe never answered, and the same error object is thrown again so the worker's retryable-vs-permanent check still works. Parameters, bodies and error messages are never logged, because a Checkout Session carries the customer's email.
+  - `src/stripe/stripe.module.ts`: provides and exports `StripeCalls` next to the client.
+  - `src/stripe/stripe-calls.spec.ts` (new): 8 unit tests, one per case.
+
+### Problems and fixes
+
+- **Stripe's own `response` event was not enough.** The library emits `request` and `response` events, which would log every call with no changes where Stripe is called. Reading the installed `RequestSender.js` showed that a connection error or timeout never emits `response`, and the event can't know which Stripe event a call belongs to. A wrapper sees every outcome and gets the event ID passed in plainly.
+
+### Verified
+
+- Task 1: 8 new unit tests pass. Swallowing the error instead of rethrowing it fails 3 of them.

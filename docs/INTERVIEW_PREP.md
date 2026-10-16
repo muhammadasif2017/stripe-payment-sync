@@ -192,3 +192,17 @@ With the database stopped, the worker's jobs failed and BullMQ scheduled them ag
 
 **What if the database is still down on the last attempt?**
 The job fails in BullMQ, but the event can't be marked `FAILED` because the database is the problem; it stays `PENDING`. The failed job shows in the dashboard with a retry button (stage 6), and the daily reconciliation (stage 7) compares Stripe with the database and queues anything missed. Retries handle short outages; reconciliation handles the rest.
+
+## Stage 6: Logging and dashboard
+
+**How do you log calls to Stripe?**
+Every call goes through one small function, `StripeCalls.run`, which takes the endpoint name, what the call is for (an event ID, or an order ID during checkout) and the call itself. It times the call and writes one line: endpoint, event, HTTP status, Stripe's request ID and duration. If the call fails it logs a warning and throws the same error on, so the code calling it behaves exactly as before.
+
+**Why not use the Stripe library's built-in `response` event?**
+It looked simpler, but reading the library's code showed it never fires when no response arrives, such as a connection error or a timeout, which are the failures you most want to see. It also runs on the shared client, so it can't know which Stripe event the worker is processing. The wrapper sees every outcome and gets the event ID passed in directly.
+
+**Why log the Stripe request ID?**
+Stripe gives every API request an ID (`req_...`). With it, Stripe support, or the Stripe dashboard's request log, can show exactly what was sent and what came back. It turns "a call failed around 3 pm" into one searchable line.
+
+**What do you keep out of the logs?**
+Request and response bodies, and error messages. A Checkout Session contains the customer's email, and logs are often copied to other systems with wider access than the database. A unit test checks that an email in the call never appears in the output.
