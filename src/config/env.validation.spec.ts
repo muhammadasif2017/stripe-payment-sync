@@ -6,6 +6,7 @@ const validEnv = {
   STRIPE_SECRET_KEY: 'sk_test_123',
   STRIPE_WEBHOOK_SECRET: 'whsec_123',
   APP_URL: 'http://localhost:3000',
+  ADMIN_PASSWORD: 'a-long-enough-password',
 };
 
 describe('validateEnv', () => {
@@ -65,6 +66,23 @@ describe('validateEnv', () => {
 
   it('rejects a WORKER_ENABLED that is not true or false', () => {
     expect(() => validateEnv({ ...validEnv, WORKER_ENABLED: 'flase' })).toThrow('WORKER_ENABLED');
+  });
+
+  it('defaults ADMIN_USERNAME to admin and requires ADMIN_PASSWORD', () => {
+    expect(validateEnv(validEnv).ADMIN_USERNAME).toBe('admin');
+    const { ADMIN_PASSWORD: _, ...withoutPassword } = validEnv;
+    expect(() => validateEnv(withoutPassword)).toThrow('"ADMIN_PASSWORD" is required');
+  });
+
+  it('rejects a short ADMIN_PASSWORD without printing it', () => {
+    const run = () => validateEnv({ ...validEnv, ADMIN_PASSWORD: 'short-secret' });
+
+    expect(run).toThrow('"ADMIN_PASSWORD" must be at least 16 characters long');
+    expect(run).not.toThrow('short-secret');
+  });
+
+  it('rejects an ADMIN_USERNAME with a colon', () => {
+    expect(() => validateEnv({ ...validEnv, ADMIN_USERNAME: 'ad:min' })).toThrow('ADMIN_USERNAME');
   });
 
   it('does not put secret values in the error message', () => {

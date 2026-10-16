@@ -191,13 +191,24 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - `src/worker/stripe-event-handler.ts`: `checkout.sessions.retrieve`, `paymentIntents.retrieve` and `refunds.list` run through `StripeCalls` with `event=<id>`. Refunds are now fetched page by page (`has_more` and `starting_after`, 100 per page) instead of with `autoPagingToArray`, so each page is one logged call. A safety limit of 100 pages stops a runaway loop.
   - `src/checkout/checkout.service.spec.ts`, `test/stripe-event-handler.e2e-spec.ts`: pass a `StripeCalls` to the service and the handler. The fake Stripe client now returns refunds one page at a time like the real API. No existing expectation changed.
   - `test/stripe-event-handler.e2e-spec.ts`: new test with 3 refunds on pages of 2; all 3 are recorded and 2 `refunds.list` log lines name the event.
+- **Task 3: Bull Board behind Basic auth.** Each change and why:
+  - `package.json`: `@bull-board/api`, `@bull-board/express`, `@bull-board/nestjs` at `9.10.4`, exact (the brief: "Mount Bull Board at /admin/queues"). Their peer `@nestjs/bull-shared` was already installed by `@nestjs/bullmq`. `npm audit` still reports the same 9 findings as before; none come from Bull Board.
+  - `src/admin/basic-auth.ts` (new): the login (the brief: "behind a login"). Parses `Authorization: Basic ...`, compares SHA-256 hashes of the user name and password with `timingSafeEqual`, and answers anything else with 401 and `WWW-Authenticate`, which makes the browser ask for a login. Rejected attempts are logged with IP and path, never with what was typed.
+  - `src/admin/admin.module.ts` (new): mounts Bull Board at `/admin/queues` for the `stripe-events` queue, with the login as Bull Board's own `middleware` option so it covers every path under the route.
+  - `src/app.module.ts`: imports `AdminModule`, in every process that serves HTTP (the dashboard needs Redis, not the worker).
+  - `src/config/env.validation.ts`, `.env.example`, `vitest.config.e2e.ts`: `ADMIN_USERNAME` (default `admin`, no colon) and `ADMIN_PASSWORD` (required, 16+ characters, value never printed). The e2e suite uses a fixed test password.
+  - `test/admin.e2e-spec.ts` (new): the page loads with the right login (proves the board is mounted), the queue is listed, 5 paths ask for a login without one, a wrong password is refused for pages and actions, a failed job is retried through the dashboard API, and cross-origin requests are not approved.
+  - `test/worker.e2e-spec.ts`: 3 tests for what the retry button does with a real worker (below).
 
 ### Problems and fixes
 
 - **Prettier and the 80-column default, again.** Running Prettier on a changed file rewrapped unrelated lines at 80 columns. Reverted, then formatted with `--print-width 100`, which matches the existing code.
+- **What the retry button does to attempt counts.** Bull Board's retry handler calls `job.retry(state)` without BullMQ's `resetAttemptsMade` option, so `attemptsMade` stays at 5. A manual retry is attempt 6: the processor sees it as the last attempt, so it gets one try and no automatic retries. On success the event shows `attempts = 6`; on failure it is `FAILED` again with `attempts = 6`. The history is kept, and a manual retry can't start another 2.5 minutes of retries. Retrying a completed job is harmless: the processor skips events already `PROCESSED`.
+- **Bull Board can also add, change and delete jobs.** Its API includes "add job", "update job data", "empty queue" and "obliterate". Its read-only mode would hide the retry button too, so it stays off; the login is the protection. A deleted job loses nothing: the event row stays in `stripe_events`, and stage 7's reconciliation re-queues missing payments.
 - **Stripe's own `response` event was not enough.** The library emits `request` and `response` events, which would log every call with no changes where Stripe is called. Reading the installed `RequestSender.js` showed that a connection error or timeout never emits `response`, and the event can't know which Stripe event a call belongs to. A wrapper sees every outcome and gets the event ID passed in plainly.
 
 ### Verified
 
 - Task 1: 8 new unit tests pass. Swallowing the error instead of rethrowing it fails 3 of them.
 - Task 2: 106 unit tests and 54 e2e tests pass. Stopping after the first page of refunds fails the new pagination test.
+- Task 3: 121 unit tests and 69 e2e tests pass. Removing the login middleware fails 6 dashboard tests. The test that loads the page with the right login matters as much as the 401 tests: a board that silently wasn't mounted would answer 404, and "not 200" alone would look like a working login.

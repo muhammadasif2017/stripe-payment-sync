@@ -1,6 +1,7 @@
 import { Module, ValidationPipe } from '@nestjs/common';
 import { ConditionalModule, ConfigModule } from '@nestjs/config';
 import { APP_PIPE } from '@nestjs/core';
+import { AdminModule } from './admin/admin.module.js';
 import { CheckoutModule } from './checkout/checkout.module.js';
 import { validateEnv } from './config/env.validation.js';
 import { HealthModule } from './health/health.module.js';
@@ -19,6 +20,7 @@ import { WorkerModule } from './worker/worker.module.js';
     HealthModule,
     CheckoutModule,
     WebhooksModule,
+    AdminModule,
     // The worker runs unless WORKER_ENABLED=false: one image can then run as the API, the worker or both.
     ConditionalModule.registerWhen(WorkerModule, 'WORKER_ENABLED'),
   ],

@@ -51,20 +51,20 @@
 **Description:** Mount Bull Board at `/admin/queues` for the `stripe-events` queue, protected by a Basic auth middleware.
 
 **Acceptance criteria:**
-- [ ] `@bull-board/api`, `@bull-board/express`, `@bull-board/nestjs` installed at `9.10.4` (exact); `@nestjs/bull-shared` present
-- [ ] `ADMIN_USERNAME` (default `admin`) and `ADMIN_PASSWORD` (required, 16+ characters, value never printed) in `env.validation.ts`, `.env.example` and the e2e config
-- [ ] Credentials compared as SHA-256 hashes with `timingSafeEqual`; failures logged without the submitted values
-- [ ] Missing or wrong credentials: `401` with `WWW-Authenticate: Basic realm="admin"`
-- [ ] Bull Board's retry behaviour read from the installed code (`resetAttemptsMade` passed or not) and written down
+- [x] `@bull-board/api`, `@bull-board/express`, `@bull-board/nestjs` installed at `9.10.4` (exact); `@nestjs/bull-shared` present
+- [x] `ADMIN_USERNAME` (default `admin`) and `ADMIN_PASSWORD` (required, 16+ characters, value never printed) in `env.validation.ts`, `.env.example` and the e2e config
+- [x] Credentials compared as SHA-256 hashes with `timingSafeEqual`; failures logged without the submitted values
+- [x] Missing or wrong credentials: `401` with `WWW-Authenticate: Basic realm="admin"`
+- [x] Bull Board's retry behaviour read from the installed code (`resetAttemptsMade` passed or not) and written down
 
 **Verification:**
-- [ ] Unit tests for the auth middleware: right, wrong user, wrong password, malformed header, missing header
-- [ ] e2e: with correct credentials `/admin/queues` returns `200` HTML (proves the board is mounted)
-- [ ] e2e: without credentials `401` on `/admin/queues`, `/admin/queues/`, an API route and a static file
-- [ ] e2e: a failed job is retried through the dashboard's API route and moves back to waiting
-- [ ] Worker e2e: a manual retry of a failed job records the attempt count found above and completes
-- [ ] e2e: a dashboard action sent cross-origin without a CORS preflight is not approved
-- [ ] Prove a test can fail (e.g. register the middleware on the wrong path)
+- [x] Unit tests for the auth middleware: right, wrong user, wrong password, malformed header, missing header
+- [x] e2e: with correct credentials `/admin/queues` returns `200` HTML (proves the board is mounted)
+- [x] e2e: without credentials `401` on `/admin/queues`, `/admin/queues/`, an API route and a static file
+- [x] e2e: a failed job is retried through the dashboard's API route and moves back to waiting
+- [x] Worker e2e: a manual retry of a failed job records the attempt count found above and completes
+- [x] e2e: a dashboard action sent cross-origin without a CORS preflight is not approved
+- [x] Prove a test can fail (e.g. register the middleware on the wrong path)
 
 **Dependencies:** None (can run in parallel with tasks 1–2)
 
@@ -73,7 +73,7 @@
 **Estimated scope:** Medium
 
 ## Checkpoint: Dashboard
-- [ ] Tasks 1–3 verified, all five checks pass, commit
+- [x] Tasks 1–3 verified, all five checks pass, commit
 
 ## Task 4: Forced failure check, docs and pull request
 

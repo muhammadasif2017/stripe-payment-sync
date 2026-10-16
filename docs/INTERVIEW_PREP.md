@@ -204,5 +204,20 @@ It looked simpler, but reading the library's code showed it never fires when no 
 **Why log the Stripe request ID?**
 Stripe gives every API request an ID (`req_...`). With it, Stripe support, or the Stripe dashboard's request log, can show exactly what was sent and what came back. It turns "a call failed around 3 pm" into one searchable line.
 
+**How is the dashboard protected?**
+With HTTP Basic auth, passed to Bull Board as its own middleware, so the page, its static files and its JSON API all go through the same check. The browser shows its built-in login box when it gets a 401 with `WWW-Authenticate: Basic`. The password is a required setting with at least 16 characters and no default, so the dashboard never runs with a known password. Tests send requests with no login to the page, a sub-page, the API and a static file, and expect 401 on each.
+
+**Why hash before `timingSafeEqual`?**
+A normal `===` stops at the first wrong character, so in theory the response time reveals how much of a guess was right. `timingSafeEqual` always compares every byte, but it throws when the two inputs have different lengths, which would leak the length. Hashing both sides with SHA-256 makes them always 32 bytes.
+
+**Isn't Basic auth insecure?**
+The password is only base64-encoded, so anyone who can read the traffic can read it. On localhost that's fine; anywhere else the app must sit behind HTTPS, which also encrypts the header. It has no logout and no lockout after many wrong guesses. For an internal admin page those limits are acceptable; a customer-facing login would need sessions, CSRF protection and rate limiting.
+
+**Could another website make an admin's browser press dashboard buttons?**
+The browser re-sends Basic credentials automatically, so it's a fair question (the attack is called CSRF). Bull Board's actions are `PUT` requests with JSON, and a cross-site request like that needs the server to approve a CORS "preflight" first. This app never enables CORS, so the browser refuses to send it. A test sends the preflight and checks no approval comes back.
+
+**What does the retry button actually do?**
+It calls BullMQ's `job.retry()`, which moves the failed job back to the waiting list. Bull Board doesn't reset the attempt counter, so after 5 failures the manual retry is attempt 6, gets one try, and the event's `attempts` column keeps the full count. Retrying a job that already completed is harmless because the worker skips events marked `PROCESSED`. Both are covered by tests that click the button through the dashboard's API with a real worker running.
+
 **What do you keep out of the logs?**
 Request and response bodies, and error messages. A Checkout Session contains the customer's email, and logs are often copied to other systems with wider access than the database. A unit test checks that an email in the call never appears in the output.

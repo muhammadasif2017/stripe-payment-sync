@@ -22,6 +22,9 @@ export default defineConfig({
       // test/worker.e2e-spec.ts starts its own worker with a fake Stripe client.
       STRIPE_SECRET_KEY: 'sk_test_e2e_dummy_key',
       WORKER_ENABLED: 'false',
+      // Fixed dashboard login, so test/admin.e2e-spec.ts doesn't depend on .env.
+      ADMIN_USERNAME: 'admin',
+      ADMIN_PASSWORD: 'e2e-dashboard-password',
     },
     // Database test files share one database; run them one at a time so their rows don't collide.
     fileParallelism: false,
