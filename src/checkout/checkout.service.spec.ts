@@ -62,6 +62,7 @@ describe('CheckoutService', () => {
       {
         mode: 'payment',
         allowed_payment_method_types: ['card'],
+        adaptive_pricing: { enabled: false },
         line_items: [
           {
             quantity: 1,

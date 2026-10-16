@@ -24,15 +24,15 @@
 **Description:** For each handled event type, fetch the latest object from Stripe and apply it to the database in one transaction with the order row locked.
 
 **Acceptance criteria:**
-- [ ] Order found from `metadata.order_id`; missing or unknown order is a permanent error
-- [ ] Currency or amount different from the order's is a permanent error
-- [ ] Payments and refunds upserted by Stripe ID; order status recomputed; event marked `PROCESSED` in the same transaction
-- [ ] Adaptive Pricing turned off in the Checkout Session (decision 1); the stage 3 unit test updated
-- [ ] Stripe errors classified by type: invalid request is permanent; rate limit, connection and API errors are retried
+- [x] Order found from `metadata.order_id`; missing or unknown order is a permanent error
+- [x] Currency or amount different from the order's is a permanent error
+- [x] Payments and refunds upserted by Stripe ID; order status recomputed; event marked `PROCESSED` in the same transaction
+- [x] Adaptive Pricing turned off in the Checkout Session (decision 1); the stage 3 unit test updated
+- [x] Stripe errors classified by type: invalid request is permanent; rate limit, connection and API errors are retried
 
 **Verification:**
-- [ ] e2e tests against the test database with a fake Stripe client: each event type, the same event twice, events out of order (refund before payment; canceled after expired stays `EXPIRED`), a late `payment_failed` for a payment intent that has since succeeded, a missing order
-- [ ] Prove a test can fail (e.g. drop the lock or the upsert)
+- [x] e2e tests against the test database with a fake Stripe client: each event type, the same event twice, events out of order (refund before payment; canceled after expired stays `EXPIRED`), a late `payment_failed` for a payment intent that has since succeeded, a missing order
+- [x] Prove a test can fail (e.g. drop the lock or the upsert)
 
 **Dependencies:** Task 1
 
@@ -41,7 +41,7 @@
 **Estimated scope:** Medium to large
 
 ## Checkpoint: Processing logic
-- [ ] Tasks 1–2 verified, all five checks pass, commit
+- [x] Tasks 1–2 verified, all five checks pass, commit
 
 ## Task 3: BullMQ processor, retries and error recording
 

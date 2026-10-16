@@ -147,7 +147,13 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 ### What was built
 
 - **Task 1: Mapping functions** (`src/worker/mapping.ts`, no database or network). `toPaymentStatus` maps a payment intent to `SUCCEEDED`, `CANCELED`, `FAILED` (declined, back to `requires_payment_method` with an error) or nothing yet. `toRefundStatus` maps refund statuses; unknown ones count as pending. `deriveOrderStatus` computes the order status from succeeded payments and refunds, an expired checkout and declined cards, and refuses refunds above the amount paid with a `PermanentProcessingError`.
+- **Task 2: Event handler and transaction.** Each change and why:
+  - `src/worker/stripe-event-handler.ts` (new): the brief requires processing to fetch the latest object from Stripe and update order, payment and refund in one transaction. It fetches the session, payment intent or refunds (every page) before the transaction, so no lock is held during network calls; then, inside one transaction, it locks the order row, upserts the payment and refunds on their Stripe IDs, recomputes the order status with `deriveOrderStatus`, and marks the event `PROCESSED`. A missing or unknown `order_id`, an amount or currency that differs from the order, or a Stripe invalid-request error becomes a `PermanentProcessingError`; rate limits, connection and server errors stay retryable.
+  - `src/checkout/checkout.service.ts`: `adaptive_pricing: { enabled: false }` (decision 1). Stage 4 showed Checkout offering PKR; a payment in another currency would now fail the amount check, so the session must charge the catalog price in USD.
+  - `src/checkout/checkout.service.spec.ts`: the stage 3 test asserts the exact session parameters, so it gains the one new parameter. No other expectation changed.
+  - `test/stripe-event-handler.e2e-spec.ts` (new): 12 tests against the test database with a fake Stripe client, one per behaviour in the plan.
 
 ### Verified
 
 - Task 1: 26 unit tests. Mapping every `requires_payment_method` to `FAILED`, or checking "declined" before "expired", each fails a test.
+- Task 2: 96 unit tests and 47 e2e tests pass. Making the expiry non-sticky, removing the amount and currency check, or removing the Stripe error classification each fails exactly its test. The order-row lock is not proven by a test: a race between two transactions can't be forced reliably in a test, so it rests on PostgreSQL's documented `FOR UPDATE` behaviour.

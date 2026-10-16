@@ -171,3 +171,12 @@ Stripe doesn't promise delivery order, and retries can run minutes later. If eac
 
 **Why does an expired order stay expired?**
 When a checkout session expires, Stripe can also cancel its payment intent. If the cancellation is processed after the expiry, a status built only from payments would see "nothing paid, nothing failed" and go back to `PENDING`. The expiry is an input to the calculation, and it only gives way when money was actually paid.
+
+**Why fetch the object from Stripe instead of using the event's copy?**
+The event body is a snapshot from when it was created. By the time the job runs, the payment may have moved on: a declined card retried successfully, a refund added. Fetching the current object means the database always ends up matching Stripe, whatever order the events arrive in. The event only tells the worker what to look at.
+
+**Why lock the order row?**
+Two jobs for the same order can run at the same time, for example the payment and a quick refund. Each reads the payments and refunds, computes a status and writes it; without a lock, the slower one can overwrite the other with a status computed from stale rows. `SELECT ... FOR UPDATE` makes the second transaction wait until the first commits. Stripe is called before the transaction, so the lock is held for milliseconds, not for a network call.
+
+**Which errors are retried and which are not?**
+Retried: the database being down, network errors, Stripe rate limits and Stripe server errors, because they pass. Not retried: an event with no matching order, an amount or currency that doesn't match the order, or Stripe saying the object doesn't exist. Retrying those would fail five times in a row and hide the real problem, so they fail at once with the reason saved for someone to look at.
