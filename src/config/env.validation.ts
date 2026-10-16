@@ -1,3 +1,4 @@
+import { CronExpressionParser } from 'cron-parser';
 import Joi from 'joi';
 
 /** Settings the app needs, after validation and type conversion. */
@@ -14,6 +15,8 @@ export interface Env {
   /** Login for the queue dashboard at /admin/queues. */
   ADMIN_USERNAME: string;
   ADMIN_PASSWORD: string;
+  /** When the daily reconciliation runs: a 5-field cron pattern, in UTC. */
+  RECONCILIATION_CRON: string;
 }
 
 // Custom messages keep secret values out of errors; Joi's default pattern message prints the value.
@@ -51,6 +54,24 @@ const envSchema = Joi.object<Env>({
     .min(16)
     .required()
     .messages({ 'string.min': '{#label} must be at least {#limit} characters long' }),
+  // Parsed with the same library BullMQ uses, so a pattern that passes here also schedules.
+  RECONCILIATION_CRON: Joi.string()
+    .default('0 3 * * *')
+    .custom((value: string, helpers) => {
+      if (value.trim().split(/\s+/).length !== 5) {
+        return helpers.error('any.invalid');
+      }
+      try {
+        CronExpressionParser.parse(value, { tz: 'UTC' });
+      } catch {
+        return helpers.error('any.invalid');
+      }
+      return value;
+    })
+    .messages({
+      'any.invalid':
+        '{#label} must be a 5-field cron pattern such as "0 3 * * *" (minute hour day month weekday)',
+    }),
 });
 
 /**

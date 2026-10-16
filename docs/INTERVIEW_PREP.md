@@ -224,3 +224,27 @@ Request and response bodies, and error messages. A Checkout Session contains the
 
 **Show me the dashboard working.**
 A worker was started with a wrong Stripe key. Each attempt logged one line, such as `checkout.sessions.retrieve event=evt_… status=401 (StripeAuthenticationError) duration=116ms`, and after 5 attempts the event was `FAILED`. The dashboard showed the job in its Failed list with the error. After the worker restarted with the right key, one click on Retry ran attempt 6: the Stripe call returned 200, the payment was recorded and the order became `PAID`. A wrong key is a realistic failure (a rotated key not yet deployed), and it showed the logging and the dashboard in one run.
+
+## Stage 7: Daily reconciliation
+
+**Why do you need reconciliation if you have webhooks and retries?**
+Webhooks can be missed: the endpoint was down longer than Stripe keeps retrying, a secret was rotated wrongly, or a bug dropped an event. Retries only help with events that arrived. Reconciliation asks Stripe directly what was paid and compares it with the database, so the database ends up right even when the event path failed. It is the difference between "usually correct" and "correct by the next morning".
+
+**Why not re-queue the original Stripe event?**
+Three reasons. The job for that event is still in Redis for 7 days, and BullMQ ignores a new job with the same ID. The worker skips events already marked `PROCESSED`. And the event may never have arrived, which is one of the cases reconciliation exists for. So a repair is its own job, keyed by the Checkout Session, and reuses the same "fetch the latest state, write it in one transaction" code.
+
+**How does it decide what is missing?**
+It lists the completed Checkout Sessions of the last 2 days from Stripe. A session needs repair when Stripe says it is paid, it carries the ID of an order that exists, and the database has no succeeded payment for its payment intent. That one rule covers a deleted row, a webhook that never came, an event stuck after the database was down, and a stale failed row. Sessions without an order ID (test events from `stripe trigger`) or with an unknown order are counted and skipped, never queued: those would fail every day. All the payments are loaded in one query, not one per session.
+
+**Why a BullMQ job scheduler instead of a cron library?**
+An in-process timer runs in every copy of the app, so two workers would reconcile twice, and a restart at the wrong moment skips a day. A BullMQ scheduler stores the schedule in Redis and creates one job per run, which exactly one worker takes. Runs get retries like any job, their result shows on the dashboard, and an admin can press "Run now".
+
+**Why is each repair job ID unique per run?**
+BullMQ ignores a job whose ID already exists, and completed jobs are kept for 7 days. A fixed ID like `reconcile-<session>` would make tomorrow's repair a silent no-op if today's had already run. Adding the run's timestamp makes every run's repairs real. Repairs are idempotent (upserts on Stripe IDs, status recomputed), so an occasional duplicate does no harm.
+
+**What does Stripe's `created` filter take?**
+Unix seconds. JavaScript dates are in milliseconds, and passing milliseconds would ask for sessions created thousands of years from now: the run would quietly find nothing. A unit test pins the exact number for a known date, and an e2e test checks what was sent to Stripe.
+
+**Show me reconciliation working.**
+A payment row was deleted from the development database, then "Run now" was pressed on the dashboard. The run listed 5 completed sessions from Stripe, found 2 paid sessions without a payment, and queued 2 repairs, which completed within a second. One was the deleted row. The other was a real gap nobody had planted: a test payment from before the webhook existed, whose order had sat at `PENDING` for a day. A second run found nothing missing. It is a good example of why the check exists: the webhook path had no way to know about that payment.
+

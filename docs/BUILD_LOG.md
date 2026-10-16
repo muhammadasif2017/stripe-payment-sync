@@ -225,3 +225,48 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - The worker restarted with the real key. Clicking **Retry** (then **Confirm**) ran attempt 6: `checkout.sessions.retrieve … status=200 duration=812ms request=req_hUQZ…`. The event is `PROCESSED` with `attempts = 6`, the payment `SUCCEEDED` (4900 cents), the order `PAID`.
   - The 401 log lines have no Stripe request ID: Stripe's authentication errors don't carry one. The line still shows status, error type and duration.
 - Task 4 fixes: 132 unit tests and 71 e2e tests pass; lint, type check and build are clean. Bypassing the same-origin check fails the cross-site test.
+
+## Stage 7: Daily reconciliation (2026-10-16)
+
+### What was built
+
+- **Task 1: Repair one Checkout Session.** Each change and why:
+  - `src/worker/stripe-event-handler.ts`: the brief asks for a job that finds payments missing from the database and queues them. Re-queuing the original Stripe event can't do that: its job ID is still in Redis for 7 days (so a new add is ignored), the processor skips events already `PROCESSED`, and the event may never have arrived. So the handler gains `reconcileSession(sessionId)`, which fetches the session with its payment intent and every page of that payment intent's refunds, then writes them through the same transaction as events. The transaction moved into a private `apply()`; only events mark a `stripe_events` row `PROCESSED`, since a repair has no row. Repair calls are logged with `job=reconciliation`. The "no valid order_id" message now names what was processed (`Event evt_...` or `Session cs_...`); the event wording is unchanged.
+  - `test/stripe-event-handler.e2e-spec.ts`: 4 tests: a deleted payment and its refund come back and the order is recomputed; running twice changes nothing; the calls are logged as `job=reconciliation` and no event row is written; a session without `order_id` fails permanently.
+- **Task 2: `reconcile-session` jobs in the worker.** Each change and why:
+  - `src/queue/queue.module.ts`: job name constants `stripe-event` and `reconcile-session`, and the `ReconcileSessionJob` data type. Repairs use the existing `stripe-events` queue, so they get the same 5 attempts with backoff, the same worker and the same dashboard.
+  - `src/worker/stripe-events.processor.ts`: dispatches on the job name. A job with an unknown name, or without its `eventId` / `sessionId`, fails at once with `UnrecoverableError`: Bull Board's "add job" can create any job, and retrying a malformed one 5 times helps nobody. Repair failures are logged and retried like events, but never written to `stripe_events`, because a repair has no row there (an update would fail with "record not found").
+  - `src/webhooks/webhooks.service.ts`: uses the `STRIPE_EVENT_JOB` constant instead of the string.
+  - `test/worker.e2e-spec.ts`: the fake Stripe client gains sessions and refunds. 5 tests: a repair writes the missing payment and leaves the stored event untouched; a repair that fails once is retried and completes; an unknown name, a `stripe-event` without `eventId` and a `reconcile-session` without `sessionId` each fail after 1 attempt.
+- **Task 3: The reconciliation run and its schedule.** Each change and why:
+  - `src/reconciliation/missing-payments.ts` (new): pure functions, no database or network. `windowStart(now)` is 2 days before the run in Unix **seconds**, which Stripe's `created` filter expects. `selectMissing` picks the sessions to repair: paid, with a payment intent, a valid `order_id` of an order that exists, and no `SUCCEEDED` payment for that payment intent. Every other session is counted under its reason (not paid, no order ID, unknown order, already recorded).
+  - `src/reconciliation/reconciliation.service.ts` (new): the brief's job. Lists `complete` sessions created in the window page by page through `StripeCalls` (`job=reconciliation` in the log, safety limit of 100 pages), loads the orders and the SUCCEEDED payments in two queries for the whole run, and queues one `reconcile-session` job per missing payment with `addBulk`. The job ID is `reconcile-<sessionId>-<run time in ms>`: unique per run, so yesterday's repair, still kept in Redis, doesn't block today's. BullMQ refuses `:` in custom IDs (read from its `validateOptions`), so the parts are joined with `-`. Logs one summary line, plus a warning per missing session.
+  - `src/reconciliation/reconciliation.processor.ts` (new): runs reconciliation jobs with concurrency 1 and returns the summary, so each run's counts are visible on the dashboard.
+  - `src/reconciliation/reconciliation.scheduler.ts` (new): at worker startup, `upsertJobScheduler('daily-reconciliation', { pattern, tz: 'UTC' })`. The schedule lives in Redis, so with several workers only one takes each run, and calling it on every start is safe (it updates the pattern). If Redis is unreachable the worker fails to start rather than run without a schedule.
+  - `src/reconciliation/reconciliation.module.ts` (new), `src/worker/worker.module.ts`: the worker imports reconciliation, so it runs wherever events are processed.
+  - `src/queue/queue.module.ts`: registers the `reconciliation` queue (3 attempts, 1 and 2 minutes apart; completed runs kept 30 days). It is a separate queue because a scheduler keeps its next run waiting as a delayed job, which shouldn't mix with Stripe events. Registered here rather than in the worker, so the API-only process and the dashboard see it.
+  - `src/admin/admin.module.ts`: the dashboard shows both queues; the scheduler's **Run now** button starts a run (decision 2).
+  - `src/config/env.validation.ts`, `.env.example`, `package.json`: `RECONCILIATION_CRON` (default `0 3 * * *`, UTC; decision 1). Validated at startup with `cron-parser`, the library BullMQ itself uses, pinned to BullMQ's version `5.10.1` so npm keeps one copy. `cron-parser` alone accepts 4 fields (`0 3 * *`), so the rule also requires exactly 5.
+  - `src/worker/mapping.ts`, `src/worker/stripe-event-handler.ts`: the order ID check moved to `findOrderId()`, shared by the handler and reconciliation.
+  - Tests: `src/reconciliation/missing-payments.spec.ts` (10), `src/config/env.validation.spec.ts` (+5), `test/reconciliation.e2e-spec.ts` (5: a missing payment is queued and only that one, the window and status sent to Stripe, every page read, a second run queues again with a new ID, nothing queued when all is recorded), `test/reconciliation-schedule.e2e-spec.ts` (2, with a real worker: the scheduler is registered at 03:00 UTC; the dashboard's Run now route runs it and the job returns the summary). `test/admin.e2e-spec.ts` now expects both queues on the dashboard, on purpose. `test/worker.e2e-spec.ts` removes the scheduler its worker registers.
+
+- **Task 4: Delete-and-restore check, docs.** `README.md` (walkthrough step 6, failure table, setting, known limits), `CLAUDE.md` (how to start a run, job ID rule, scheduler cleanup in e2e) and these docs.
+
+### Problems and fixes
+
+- **Reconciliation found a real gap on its first run.** Besides the deleted row, it repaired the stage 3 test payment (`pi_3UQsF1…`, session `cs_test_a1cWrd…`). That payment was made before the webhook endpoint existed (stage 4), so its order had stayed `PENDING` with no payment row. It is now `PAID` with its payment. This is exactly the "webhook never arrived" case reconciliation exists for.
+- **A wrong number in a test, caught by the test.** The first version of the window test pinned an epoch value from the wrong year. It failed at once; the constant was recomputed from the date.
+
+### Verified
+
+- Task 1: 17 handler and 9 worker e2e tests pass. Skipping the refunds in the repair fails 3 of the new tests.
+- Task 2: 14 worker e2e tests pass. Sending unknown jobs on to the event path fails all 3 malformed-job tests.
+- Task 3: 147 unit tests and 87 e2e tests pass. Computing the window in milliseconds fails a unit test and an e2e test; skipping the scheduler registration fails both schedule tests. After the suite, the test Redis holds no scheduler and the development Redis has no reconciliation keys.
+- Task 4, the "Done when" in the development database:
+  - Before: payment `pi_3UR5EgGImTS0y0Gh01L7xMXK`, 4900 `usd`, `SUCCEEDED`, row `1f3ec54a-…`; order `9b9d90ea-…` `PAID`. The row was saved, then deleted (`DELETE 1`, approved in decision 3).
+  - The app ran as API and worker. At startup it logged `Reconciliation scheduled: "0 3 * * *" (UTC)`; the dashboard showed the next run at 2026-10-17 03:00 UTC.
+  - **Run now** on the dashboard's Schedulers page (then **Confirm**): one `checkout.sessions.list job=reconciliation status=200` call, then `checked 5 completed sessions, 2 missing and queued, 2 already recorded, ... 1 without order ID`. The session without an order ID is the stage 4 `stripe trigger` one.
+  - Both repairs completed on attempt 1, each with a `checkout.sessions.retrieve` and a `refunds.list` call. After: payment `pi_3UR5EgGImTS0y0Gh01L7xMXK`, 4900 `usd`, `SUCCEEDED`, new row `4ba03437-…`; order still `PAID`. The second repair was the stage 3 payment (see Problems).
+  - A second run: `0 missing and queued, 4 already recorded`. The same "Run now" request sent with `Origin: https://evil.example` got 403.
+  - The development Redis keeps the `daily-reconciliation` scheduler, as intended: the next worker start finds it and updates it.
+- Task 4: 147 unit tests and 87 e2e tests pass; lint, type check and build are clean.

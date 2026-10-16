@@ -5,7 +5,12 @@ import type { Job, Queue } from 'bullmq';
 import request from 'supertest';
 import { AppModule } from './../src/app.module.js';
 import { PrismaService } from './../src/prisma/prisma.service.js';
-import { STRIPE_EVENTS_QUEUE, type StripeEventJob } from './../src/queue/queue.module.js';
+import {
+  RECONCILIATION_QUEUE,
+  RECONCILIATION_SCHEDULER_ID,
+  STRIPE_EVENTS_QUEUE,
+  type StripeEventJob,
+} from './../src/queue/queue.module.js';
 import { STRIPE_CLIENT } from './../src/stripe/stripe.module.js';
 import { WorkerModule } from './../src/worker/worker.module.js';
 
@@ -17,6 +22,22 @@ describe('Stripe events worker (e2e)', () => {
   const eventIds: string[] = [];
   const paymentIntents = new Map<string, object>();
   const retrievePaymentIntent = vi.fn((id: string) => Promise.resolve(paymentIntents.get(id)));
+  const sessions = new Map<string, { payment_intent: string } & Record<string, unknown>>();
+  const fakeStripe = {
+    paymentIntents: { retrieve: retrievePaymentIntent },
+    checkout: {
+      sessions: {
+        retrieve: (id: string) => {
+          const session = sessions.get(id)!;
+          return Promise.resolve({
+            ...session,
+            payment_intent: paymentIntents.get(session.payment_intent),
+          });
+        },
+      },
+    },
+    refunds: { list: () => Promise.resolve({ data: [], has_more: false }) },
+  };
   let app: INestApplication;
   let prisma: PrismaService;
   let queue: Queue<StripeEventJob>;
@@ -25,7 +46,7 @@ describe('Stripe events worker (e2e)', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule, WorkerModule] })
       .overrideProvider(STRIPE_CLIENT)
-      .useValue({ paymentIntents: { retrieve: retrievePaymentIntent } })
+      .useValue(fakeStripe)
       .compile();
     app = moduleRef.createNestApplication();
     await app.init();
@@ -51,6 +72,10 @@ describe('Stripe events worker (e2e)', () => {
     await prisma?.order.deleteMany({ where: { id: { in: orderIds } } });
     await prisma?.stripeEvent.deleteMany({ where: { id: { in: eventIds } } });
     await queue?.obliterate({ force: true });
+    // The worker module also registers the daily reconciliation scheduler; leave Redis clean.
+    const reconciliation = app?.get<Queue>(getQueueToken(RECONCILIATION_QUEUE));
+    await reconciliation?.removeJobScheduler(RECONCILIATION_SCHEDULER_ID);
+    await reconciliation?.obliterate({ force: true });
     await app?.close();
   });
 
@@ -254,5 +279,79 @@ describe('Stripe events worker (e2e)', () => {
       status: 'PROCESSED',
       attempts: 1,
     });
+  });
+
+  /** A paid Checkout Session at Stripe whose payment is missing from the database. */
+  async function missingPayment() {
+    const { orderId, eventId } = await paidOrderEvent();
+    const piId = `pi_test_${run}_${n}`;
+    const sessionId = `cs_test_${run}_${++n}`;
+    sessions.set(sessionId, {
+      id: sessionId,
+      status: 'complete',
+      currency: 'usd',
+      amount_total: 4900,
+      metadata: { order_id: orderId },
+      client_reference_id: orderId,
+      payment_intent: piId,
+    });
+    return { orderId, eventId, sessionId };
+  }
+
+  /** Adds a repair job like reconciliation does, with the fast test backoff. */
+  const enqueueRepair = (sessionId: string) =>
+    queue.add('reconcile-session' as never, { sessionId } as never, {
+      jobId: `reconcile-${sessionId}-${Date.now()}`,
+      attempts: 5,
+      backoff: { type: 'fixed', delay: 50 },
+    });
+
+  it('a reconcile-session job writes the missing payment and marks the order PAID', async () => {
+    const { orderId, eventId, sessionId } = await missingPayment();
+
+    const job = await enqueueRepair(sessionId);
+    await settled(job.id!);
+
+    expect(await queue.getJobState(job.id!)).toBe('completed');
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status).toBe('PAID');
+    expect(await prisma.payment.findMany({ where: { orderId } })).toMatchObject([
+      { amount: 4900, currency: 'usd', status: 'SUCCEEDED' },
+    ]);
+    // The repair doesn't touch stripe_events: the stored event is still PENDING and unattempted.
+    expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
+      status: 'PENDING',
+      attempts: 0,
+    });
+  });
+
+  it('a reconcile-session job that fails once is retried and completes', async () => {
+    const { orderId, sessionId } = await missingPayment();
+    vi.spyOn(prisma, '$transaction').mockRejectedValueOnce(new Error('Connection refused'));
+
+    const job = await enqueueRepair(sessionId);
+    const done = await settled(job.id!);
+
+    expect(await done.getState()).toBe('completed');
+    expect(done.attemptsMade).toBe(2);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status).toBe('PAID');
+  });
+
+  it.each([
+    ['an unknown job name', 'surprise', { eventId: 'evt_x' }],
+    ['a stripe-event job without eventId', 'stripe-event', {}],
+    ['a reconcile-session job without sessionId', 'reconcile-session', { eventId: 'evt_x' }],
+  ])('fails %s at once, without retries', async (_case, name, data) => {
+    const jobId = `bad-${run}-${++n}`;
+    await queue.add(name as never, data as never, {
+      jobId,
+      attempts: 5,
+      backoff: { type: 'fixed', delay: 50 },
+    });
+
+    const job = await settled(jobId);
+
+    expect(await job.getState()).toBe('failed');
+    expect(job.attemptsMade).toBe(1);
+    expect(job.failedReason).toContain('unknown name or data');
   });
 });

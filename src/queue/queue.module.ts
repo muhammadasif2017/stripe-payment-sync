@@ -7,9 +7,20 @@ import type { Env } from '../config/env.validation.js';
 /** Queue of Stripe events waiting for the worker. Each job's ID is the Stripe event ID. */
 export const STRIPE_EVENTS_QUEUE = 'stripe-events';
 
-/** Data of a job in {@link STRIPE_EVENTS_QUEUE}. The event itself is in `stripe_events`, not in Redis. */
+/** Name of a job that processes one stored Stripe event. */
+export const STRIPE_EVENT_JOB = 'stripe-event';
+
+/** Name of a job that repairs one paid Checkout Session found by reconciliation (stage 7). */
+export const RECONCILE_SESSION_JOB = 'reconcile-session';
+
+/** Data of a {@link STRIPE_EVENT_JOB} job. The event itself is in `stripe_events`, not in Redis. */
 export interface StripeEventJob {
   eventId: string;
+}
+
+/** Data of a {@link RECONCILE_SESSION_JOB} job. */
+export interface ReconcileSessionJob {
+  sessionId: string;
 }
 
 /**
@@ -23,6 +34,27 @@ export const STRIPE_EVENT_JOB_OPTIONS: DefaultJobOptions = {
   attempts: 5,
   backoff: { type: 'exponential', delay: 10_000 },
   removeOnComplete: { age: 7 * 24 * 60 * 60 },
+  removeOnFail: false,
+};
+
+/** Queue for the daily reconciliation run (stage 7); its job scheduler keeps the next run here. */
+export const RECONCILIATION_QUEUE = 'reconciliation';
+
+/** Name of the job that runs one reconciliation. */
+export const RECONCILIATION_JOB = 'reconcile';
+
+/** ID of the job scheduler that adds a {@link RECONCILIATION_JOB} every day. */
+export const RECONCILIATION_SCHEDULER_ID = 'daily-reconciliation';
+
+/**
+ * Settings for a reconciliation run.
+ * - 3 attempts, 1 then 2 minutes apart: a Stripe or database blip shouldn't skip a whole day.
+ * - Completed runs are kept 30 days: each one's return value is its summary, readable on the dashboard.
+ */
+export const RECONCILIATION_JOB_OPTIONS: DefaultJobOptions = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 60_000 },
+  removeOnComplete: { age: 30 * 24 * 60 * 60 },
   removeOnFail: false,
 };
 
@@ -41,10 +73,11 @@ export const STRIPE_EVENT_JOB_OPTIONS: DefaultJobOptions = {
         },
       }),
     }),
-    BullModule.registerQueue({
-      name: STRIPE_EVENTS_QUEUE,
-      defaultJobOptions: STRIPE_EVENT_JOB_OPTIONS,
-    }),
+    BullModule.registerQueue(
+      { name: STRIPE_EVENTS_QUEUE, defaultJobOptions: STRIPE_EVENT_JOB_OPTIONS },
+      // Registered here, not only in the worker, so the API-only process and the dashboard see it.
+      { name: RECONCILIATION_QUEUE, defaultJobOptions: RECONCILIATION_JOB_OPTIONS },
+    ),
   ],
   exports: [BullModule],
 })
