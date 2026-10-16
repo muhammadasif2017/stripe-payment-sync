@@ -11,6 +11,9 @@ export interface Env {
   APP_URL: string;
   /** Whether this process runs the background worker for Stripe events. */
   WORKER_ENABLED: boolean;
+  /** Login for the queue dashboard at /admin/queues. */
+  ADMIN_USERNAME: string;
+  ADMIN_PASSWORD: string;
 }
 
 // Custom messages keep secret values out of errors; Joi's default pattern message prints the value.
@@ -38,6 +41,16 @@ const envSchema = Joi.object<Env>({
     .messages({ 'string.pattern.base': '{#label} must not end with a slash' }),
   // Only true or false: a typo like "flase" stops startup instead of silently running a worker.
   WORKER_ENABLED: Joi.boolean().default(true),
+  // Basic auth sends "user:password", so a colon in the user name would split it in the wrong place.
+  ADMIN_USERNAME: Joi.string()
+    .pattern(/^[^:]+$/)
+    .default('admin')
+    .messages({ 'string.pattern.base': '{#label} must not contain a colon' }),
+  // Required with no default: the dashboard can retry and delete jobs, so it never runs with a known password.
+  ADMIN_PASSWORD: Joi.string()
+    .min(16)
+    .required()
+    .messages({ 'string.min': '{#label} must be at least {#limit} characters long' }),
 });
 
 /**

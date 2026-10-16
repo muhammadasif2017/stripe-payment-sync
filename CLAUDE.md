@@ -14,6 +14,7 @@ NestJS 12 (ES modules), TypeScript strict, Prisma 7.10.0 with `@prisma/adapter-p
 
 - Start databases: `docker compose up -d` (PostgreSQL on 5435, Redis on 6380, both 127.0.0.1 only)
 - Dev server: `npm run start:dev` (API and worker; `WORKER_ENABLED=false` for API only)
+- Queue dashboard: `http://localhost:3000/admin/queues`, Basic auth with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`
 - Unit tests: `npm test`
 - e2e tests: `npm run test:e2e` (needs the databases; runs against `payments_test`)
 - Lint / types / build: `npm run lint`, `npm run typecheck`, `npm run build`
@@ -30,6 +31,7 @@ Run all five checks (unit, e2e, lint, typecheck, build) before every commit. A h
 - Schema: camelCase in TypeScript, snake_case in PostgreSQL via `@map`/`@@map`. Money is `Int` in cents. Timestamps are `@db.Timestamptz(3)`. Every Stripe ID column is `@unique`. Foreign keys use `onDelete: Restrict`.
 - CHECK constraints cannot be expressed in `schema.prisma`; add them in a hand-written migration (`prisma migrate dev --create-only`).
 - Errors returned to clients never include internal details; log the cause server-side.
+- Every Stripe call goes through `StripeCalls.run(endpoint, context, call)` (`src/stripe/stripe-calls.ts`) so it is logged. Never log Stripe parameters or bodies.
 
 ## Tests
 
@@ -55,5 +57,8 @@ Run all five checks (unit, e2e, lint, typecheck, build) before every commit. A h
 
 - Windows PowerShell 5.1 drops empty arguments: `gh pr merge --body ""` fails. Pass real text.
 - `stripe listen` needs `--all-snapshot` (or `--events`), and `--latest` so events use the API version the code targets.
+- The Stripe CLI is installed with winget; a shell started before the install may not have it on its PATH. Call it by full path: `$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Stripe.StripeCli_Microsoft.Winget.Source_8wekyb3d8bbwe\stripe.exe`.
+- Prettier has no `printWidth` in `.prettierrc`; format changed files with `npx prettier --print-width 100 --write <files>` to match the code, never the whole project.
+- Bull Board's retry button asks "Are you sure?" before it retries.
 - npm's `latest` tag for Prisma points at an 8.x release candidate; stay on 7.10.0.
 - `prisma init` downloads agent skill folders (`.agents/`, `.claude/skills/`, `.windsurf/`); they are git-ignored, not part of the project. `.claude/settings.json` and `.claude/hooks/` are committed.

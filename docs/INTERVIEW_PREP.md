@@ -192,3 +192,35 @@ With the database stopped, the worker's jobs failed and BullMQ scheduled them ag
 
 **What if the database is still down on the last attempt?**
 The job fails in BullMQ, but the event can't be marked `FAILED` because the database is the problem; it stays `PENDING`. The failed job shows in the dashboard with a retry button (stage 6), and the daily reconciliation (stage 7) compares Stripe with the database and queues anything missed. Retries handle short outages; reconciliation handles the rest.
+
+## Stage 6: Logging and dashboard
+
+**How do you log calls to Stripe?**
+Every call goes through one small function, `StripeCalls.run`, which takes the endpoint name, what the call is for (an event ID, or an order ID during checkout) and the call itself. It times the call and writes one line: endpoint, event, HTTP status, Stripe's request ID and duration. If the call fails it logs a warning and throws the same error on, so the code calling it behaves exactly as before.
+
+**Why not use the Stripe library's built-in `response` event?**
+It looked simpler, but reading the library's code showed it never fires when no response arrives, such as a connection error or a timeout, which are the failures you most want to see. It also runs on the shared client, so it can't know which Stripe event the worker is processing. The wrapper sees every outcome and gets the event ID passed in directly.
+
+**Why log the Stripe request ID?**
+Stripe gives every API request an ID (`req_...`). With it, Stripe support, or the Stripe dashboard's request log, can show exactly what was sent and what came back. It turns "a call failed around 3 pm" into one searchable line.
+
+**How is the dashboard protected?**
+With HTTP Basic auth, passed to Bull Board as its own middleware, so the page, its static files and its JSON API all go through the same check. The browser shows its built-in login box when it gets a 401 with `WWW-Authenticate: Basic`. The password is a required setting with at least 16 characters and no default, so the dashboard never runs with a known password. Tests send requests with no login to the page, a sub-page, the API and a static file, and expect 401 on each.
+
+**Why hash before `timingSafeEqual`?**
+A normal `===` stops at the first wrong character, so in theory the response time reveals how much of a guess was right. `timingSafeEqual` always compares every byte, but it throws when the two inputs have different lengths, which would leak the length. Hashing both sides with SHA-256 makes them always 32 bytes.
+
+**Isn't Basic auth insecure?**
+The password is only base64-encoded, so anyone who can read the traffic can read it. On localhost that's fine; anywhere else the app must sit behind HTTPS, which also encrypts the header. It has no logout and no lockout after many wrong guesses. For an internal admin page those limits are acceptable; a customer-facing login would need sessions, CSRF protection and rate limiting.
+
+**Could another website make an admin's browser press dashboard buttons?**
+Yes, until it was tested. The browser re-sends Basic credentials automatically, so a page on another site can submit a form to the dashboard (the attack is called CSRF). Most of Bull Board's actions are `PUT` requests, which a browser only sends cross-site after the server approves a CORS "preflight"; this app never approves one. But Bull Board also has `POST` routes, such as "add job", and a plain HTML form can send a POST with no preflight. A test showed such a request got 200 and added a job. The fix is a second check after the login: for any request that changes something, the browser's `Sec-Fetch-Site` header must say `same-origin` (or the `Origin` header must match the host). A page can't fake those headers. Requests with neither, like curl, don't come from a browser, so they can't be forged this way and pass. Tests send the forged form request (403, no job added) and a same-origin action (allowed).
+
+**What does the retry button actually do?**
+It calls BullMQ's `job.retry()`, which moves the failed job back to the waiting list. Bull Board doesn't reset the attempt counter, so after 5 failures the manual retry is attempt 6, gets one try, and the event's `attempts` column keeps the full count. Retrying a job that already completed is harmless because the worker skips events marked `PROCESSED`. Both are covered by tests that click the button through the dashboard's API with a real worker running.
+
+**What do you keep out of the logs?**
+Request and response bodies, and error messages. A Checkout Session contains the customer's email, and logs are often copied to other systems with wider access than the database. A unit test checks that an email in the call never appears in the output.
+
+**Show me the dashboard working.**
+A worker was started with a wrong Stripe key. Each attempt logged one line, such as `checkout.sessions.retrieve event=evt_… status=401 (StripeAuthenticationError) duration=116ms`, and after 5 attempts the event was `FAILED`. The dashboard showed the job in its Failed list with the error. After the worker restarted with the right key, one click on Retry ran attempt 6: the Stripe call returned 200, the payment was recorded and the order became `PAID`. A wrong key is a realistic failure (a rotated key not yet deployed), and it showed the logging and the dashboard in one run.

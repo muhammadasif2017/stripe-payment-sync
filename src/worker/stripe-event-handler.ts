@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import Stripe from 'stripe';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { StripeCalls } from '../stripe/stripe-calls.js';
 import { STRIPE_CLIENT } from '../stripe/stripe.module.js';
 import {
   deriveOrderStatus,
@@ -25,6 +26,12 @@ interface Snapshot {
   refunds?: Stripe.Refund[];
 }
 
+/** Refunds fetched per page, Stripe's maximum. */
+const REFUND_PAGE_SIZE = 100;
+
+/** Stops a runaway pagination loop: 100 pages is 10,000 refunds, far more than one payment can have. */
+const MAX_REFUND_PAGES = 100;
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -36,6 +43,7 @@ export class StripeEventHandler {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(STRIPE_CLIENT) private readonly stripe: Stripe,
+    private readonly stripeCalls: StripeCalls,
   ) {}
 
   /**
@@ -143,13 +151,14 @@ export class StripeEventHandler {
       throw new PermanentProcessingError(`Event ${event.id} has no data.object.id`);
     }
 
+    const context = { eventId: event.id };
     return withStripeErrors(async () => {
       switch (event.type) {
         case 'checkout.session.completed':
         case 'checkout.session.expired': {
-          const session = await this.stripe.checkout.sessions.retrieve(objectId, {
-            expand: ['payment_intent'],
-          });
+          const session = await this.stripeCalls.run('checkout.sessions.retrieve', context, () =>
+            this.stripe.checkout.sessions.retrieve(objectId, { expand: ['payment_intent'] }),
+          );
           const paymentIntent =
             typeof session.payment_intent === 'object' && session.payment_intent
               ? session.payment_intent
@@ -162,7 +171,9 @@ export class StripeEventHandler {
         }
         case 'payment_intent.payment_failed':
         case 'payment_intent.canceled': {
-          const paymentIntent = await this.stripe.paymentIntents.retrieve(objectId);
+          const paymentIntent = await this.stripeCalls.run('paymentIntents.retrieve', context, () =>
+            this.stripe.paymentIntents.retrieve(objectId),
+          );
           return { orderId: orderIdFrom(paymentIntent.metadata, null, event.id), paymentIntent };
         }
         case 'charge.refunded':
@@ -173,11 +184,10 @@ export class StripeEventHandler {
           if (!piId) {
             throw new PermanentProcessingError(`Event ${event.id} has no payment intent`);
           }
-          const paymentIntent = await this.stripe.paymentIntents.retrieve(piId);
-          // Every refund of the payment, across all pages, so the refunded total is complete.
-          const refunds = await this.stripe.refunds
-            .list({ payment_intent: piId, limit: 100 })
-            .autoPagingToArray({ limit: 10_000 });
+          const paymentIntent = await this.stripeCalls.run('paymentIntents.retrieve', context, () =>
+            this.stripe.paymentIntents.retrieve(piId),
+          );
+          const refunds = await this.listRefunds(piId, context);
           return {
             orderId: orderIdFrom(paymentIntent.metadata, null, event.id),
             paymentIntent,
@@ -188,6 +198,35 @@ export class StripeEventHandler {
           throw new PermanentProcessingError(`No handler for event type ${event.type}`);
       }
     });
+  }
+
+  /**
+   * Every refund of a payment intent, across all pages, so the refunded total is complete. Pages are
+   * fetched one by one (not with `autoPagingToArray`) so each page is a logged call.
+   */
+  private async listRefunds(
+    paymentIntentId: string,
+    context: { eventId: string },
+  ): Promise<Stripe.Refund[]> {
+    const refunds: Stripe.Refund[] = [];
+    let startingAfter: string | undefined;
+    for (let page = 0; page < MAX_REFUND_PAGES; page++) {
+      const result = await this.stripeCalls.run('refunds.list', context, () =>
+        this.stripe.refunds.list({
+          payment_intent: paymentIntentId,
+          limit: REFUND_PAGE_SIZE,
+          starting_after: startingAfter,
+        }),
+      );
+      refunds.push(...result.data);
+      if (!result.has_more || result.data.length === 0) {
+        return refunds;
+      }
+      startingAfter = result.data[result.data.length - 1].id;
+    }
+    throw new PermanentProcessingError(
+      `${paymentIntentId} has more than ${MAX_REFUND_PAGES * REFUND_PAGE_SIZE} refunds`,
+    );
   }
 }
 

@@ -61,6 +61,14 @@ NestJS's standard way to check request bodies: decorators on a DTO class (`@IsSt
 
 BullMQ is a job queue on Redis, as the brief asks. The webhook adds a job and answers Stripe at once; a worker (stage 5) does the work and BullMQ retries it with backoff when it fails. Jobs survive an app restart because they live in Redis, which runs with `appendonly yes` so they survive a Redis restart too. A custom job ID gives deduplication for free: adding a job whose ID already exists is ignored. BullMQ 6 can talk to several backends, so the Redis client (`ioredis`) is a separate install. `@nestjs/bullmq` provides the queue as an injectable NestJS provider.
 
+## Bull Board (`@bull-board/api`, `@bull-board/express`, `@bull-board/nestjs` 9.10.4)
+
+A ready-made web dashboard for BullMQ queues, as the brief asks: it lists waiting, active, completed and failed jobs, shows each job's data and error, and has a retry button. Writing a dashboard by hand would take days for the same result. `@bull-board/nestjs` mounts it as a NestJS module and takes a `middleware` option, which is where the login goes, so the page, its files and its JSON API are all protected by one check. Versions are pinned exactly because the dashboard can change jobs; an upgrade should be a deliberate step.
+
+## HTTP Basic auth (Node's `crypto`, no library)
+
+The dashboard login. The browser shows its own login box when the server answers 401 with `WWW-Authenticate: Basic`, then sends `user:password` in base64 with every request. No sessions, cookies or login page to build. It is about 30 lines, so no library: the user name and password are each hashed with SHA-256 and compared with `crypto.timingSafeEqual`, which takes the same time whether the first or the last character is wrong. Limits: no logout (close the browser), and base64 is not encryption, so outside localhost it must run over HTTPS. Because the browser re-sends the credentials to any request for the dashboard, a second middleware refuses changes that the browser's `Sec-Fetch-Site` or `Origin` header marks as coming from another site.
+
 ## Claude Code hooks
 
 The AI coding assistant reads `CLAUDE.md` at the start of each session, but those rules are only advice. A hook is a script the tool runs at fixed points, here before every shell command, and it can block the command. `.claude/hooks/commit-guard.mjs` is plain Node.js with no dependencies, so it runs the same in Git Bash and PowerShell. It only affects the assistant; commits typed by a person go straight to git.

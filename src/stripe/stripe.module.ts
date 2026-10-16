@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import type { Env } from '../config/env.validation.js';
+import { StripeCalls } from './stripe-calls.js';
 
 /** Injection token for the shared Stripe client: `@Inject(STRIPE_CLIENT) private readonly stripe: Stripe`. */
 export const STRIPE_CLIENT = Symbol('STRIPE_CLIENT');
@@ -27,10 +28,16 @@ export function createStripeClient(config: ConfigService<Env, true>): Stripe {
   });
 }
 
-/** Provides one Stripe client to the whole app. Tests replace it with `overrideProvider(STRIPE_CLIENT)`. */
+/**
+ * Provides one Stripe client to the whole app, and `StripeCalls`, which every call goes through so it
+ * is logged. Tests replace the client with `overrideProvider(STRIPE_CLIENT)`.
+ */
 @Global()
 @Module({
-  providers: [{ provide: STRIPE_CLIENT, useFactory: createStripeClient, inject: [ConfigService] }],
-  exports: [STRIPE_CLIENT],
+  providers: [
+    { provide: STRIPE_CLIENT, useFactory: createStripeClient, inject: [ConfigService] },
+    StripeCalls,
+  ],
+  exports: [STRIPE_CLIENT, StripeCalls],
 })
 export class StripeModule {}

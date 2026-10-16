@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type Stripe from 'stripe';
 import type { Env } from '../config/env.validation.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import { StripeCalls } from '../stripe/stripe-calls.js';
 import { CheckoutService } from './checkout.service.js';
 
 const ORDER_ID = '0b7c6b1e-4a5f-4c8e-9a51-3f2d8e1c7a90';
@@ -24,6 +25,7 @@ function setup() {
     prisma as unknown as PrismaService,
     stripe as unknown as Stripe,
     config,
+    new StripeCalls(),
   );
   return { service, prisma, createSession };
 }
@@ -32,6 +34,8 @@ describe('CheckoutService', () => {
   beforeEach(() => {
     // The service logs Stripe failures on purpose; keep the test output clean.
     vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
   });
 
   afterEach(() => {

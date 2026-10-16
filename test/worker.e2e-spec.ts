@@ -2,6 +2,7 @@ import { getQueueToken } from '@nestjs/bullmq';
 import { INestApplication, Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { Job, Queue } from 'bullmq';
+import request from 'supertest';
 import { AppModule } from './../src/app.module.js';
 import { PrismaService } from './../src/prisma/prisma.service.js';
 import { STRIPE_EVENTS_QUEUE, type StripeEventJob } from './../src/queue/queue.module.js';
@@ -190,5 +191,68 @@ describe('Stripe events worker (e2e)', () => {
 
     expect(await job.getState()).toBe('completed');
     expect(retrievePaymentIntent).not.toHaveBeenCalled();
+  });
+
+  /** Clicks the dashboard's retry button: the same API call the Bull Board page sends. */
+  const retryFromDashboard = (eventId: string) =>
+    request(app.getHttpServer())
+      .put(`/admin/queues/api/queues/${STRIPE_EVENTS_QUEUE}/${eventId}/retry`)
+      .auth('admin', 'e2e-dashboard-password');
+
+  it('a dashboard retry after 5 failures runs as attempt 6 and completes', async () => {
+    const { orderId, eventId } = await paidOrderEvent();
+    const outage = vi
+      .spyOn(prisma, '$transaction')
+      .mockRejectedValue(new Error('Connection refused'));
+    await enqueue(eventId);
+    expect(await (await settled(eventId)).getState()).toBe('failed');
+    outage.mockRestore();
+
+    await retryFromDashboard(eventId).expect(204);
+    const job = await settled(eventId);
+
+    // Bull Board doesn't reset attemptsMade, so the manual retry is attempt 6 and the event keeps its count.
+    expect(await job.getState()).toBe('completed');
+    expect(job.attemptsMade).toBe(6);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status).toBe('PAID');
+    expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
+      status: 'PROCESSED',
+      attempts: 6,
+      lastError: null,
+    });
+  });
+
+  it('a dashboard retry that fails again gets one attempt, not five more', async () => {
+    const { eventId } = await paidOrderEvent();
+    vi.spyOn(prisma, '$transaction').mockRejectedValue(new Error('Connection refused'));
+    await enqueue(eventId);
+    await settled(eventId);
+
+    await retryFromDashboard(eventId).expect(204);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('failed');
+    expect(job.attemptsMade).toBe(6);
+    expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
+      status: 'FAILED',
+      attempts: 6,
+    });
+  });
+
+  it('a dashboard retry of a completed job changes nothing and does not call Stripe again', async () => {
+    const { eventId } = await paidOrderEvent();
+    await enqueue(eventId);
+    await settled(eventId);
+    expect(retrievePaymentIntent).toHaveBeenCalledTimes(1);
+
+    await retryFromDashboard(eventId).expect(204);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('completed');
+    expect(retrievePaymentIntent).toHaveBeenCalledTimes(1);
+    expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
+      status: 'PROCESSED',
+      attempts: 1,
+    });
   });
 });

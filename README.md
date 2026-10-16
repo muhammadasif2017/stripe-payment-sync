@@ -140,7 +140,8 @@ The brief asks this directly. The answer is four independent layers, each enforc
 | PostgreSQL is down while the worker runs | Attempt fails, error logged and saved; retried after 10, 20, 40, 80 seconds |
 | Stripe rate-limits or has an outage | Retried like any temporary error |
 | Event for an unknown order, wrong amount or currency, or an object Stripe says doesn't exist | Fails **at once** (a retry can't fix it); event marked `FAILED` with the reason |
-| All 5 attempts fail | Event marked `FAILED` with `attempts = 5` and the last error |
+| All 5 attempts fail | Event marked `FAILED` with `attempts = 5` and the last error; the job waits in the dashboard's **Failed** list with a retry button |
+| A Stripe call fails | One warning line with the endpoint, event ID, HTTP status (or `no response`), error type and duration |
 | The customer closes the tab after paying | Nothing breaks: the webhook, not the browser, marks the order `PAID` |
 
 ## Quick start
@@ -151,7 +152,7 @@ The brief asks this directly. The answer is four independent layers, each enforc
 # 1. Install (also generates the Prisma client)
 npm install
 
-# 2. Configure: then put your Stripe test key (sk_test_…) in .env
+# 2. Configure: then put your Stripe test key (sk_test_…) and a dashboard password (16+ characters) in .env
 cp .env.example .env
 
 # 3. Start PostgreSQL (localhost:5435) and Redis (localhost:6380)
@@ -230,6 +231,30 @@ WORKER_ENABLED=true PORT=3001 npm run start     # terminal 2: worker only; jobs 
 docker compose start postgres                   # the next retry completes the payment
 ```
 
+### 5. Watch it in the dashboard
+
+Open <http://localhost:3000/admin/queues> and log in with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`. Every job is listed by its Stripe event ID; a failed one shows its error and attempt count.
+
+To see a failure and a manual retry, run the worker with a wrong Stripe key. Stripe answers 401, which is retried like any temporary error:
+
+```bash
+WORKER_ENABLED=false npm run start:dev                                          # terminal 1: API only
+# buy a course, then:
+WORKER_ENABLED=true PORT=3001 STRIPE_SECRET_KEY=sk_test_wrong npm run start    # terminal 2: fails 5 times (about 2.5 minutes)
+# stop terminal 2, start it again without STRIPE_SECRET_KEY=..., then click Retry on the failed job
+```
+
+The log shows each attempt:
+
+```text
+WARN [StripeCalls] checkout.sessions.retrieve event=evt_1UR5Ei… status=401 (StripeAuthenticationError) duration=116ms
+WARN [StripeEventsProcessor] Event evt_1UR5Ei… failed on attempt 5 (giving up): Error: Invalid API Key provided: sk_test_*rong
+ LOG [StripeCalls] checkout.sessions.retrieve event=evt_1UR5Ei… status=200 duration=812ms request=req_hUQZ…
+ LOG [StripeEventsProcessor] Processed checkout.session.completed event evt_1UR5Ei… (attempt 6)
+```
+
+A manual retry is one extra attempt (attempt 6), not five more. Retrying a job that already completed changes nothing: the worker skips events already `PROCESSED`.
+
 ## API
 
 | Method | Path | Body | Response |
@@ -239,6 +264,7 @@ docker compose start postgres                   # the next retry completes the p
 | `POST` | `/checkout` | `{ "courseId": "nestjs-fundamentals", "email"?: "..." }` | `201 { orderId, checkoutUrl }`; `400` for an unknown course or any extra field; `502` (generic message) when Stripe fails |
 | `POST` | `/webhooks/stripe` | Stripe event, `Stripe-Signature` header | `200 {"received":true}`; `400` for a bad signature or live mode; `500` so Stripe retries |
 | `GET` | `/`, `/success.html`, `/cancel.html` | | Minimal checkout pages |
+| `GET` | `/admin/queues` | | Bull Board queue dashboard; HTTP Basic auth on every path below it (`401` without it); changes sent from another site get `403` |
 
 ```bash
 curl -X POST http://localhost:3000/checkout \
@@ -325,6 +351,8 @@ All settings come from environment variables (`.env` locally), validated at star
 | `STRIPE_SECRET_KEY` | `sk_test_…` | Test-mode secret key; anything else is refused |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_…` | Verifies webhook signatures |
 | `WORKER_ENABLED` | `true` | `false` runs the API only, so API and worker can run as separate processes |
+| `ADMIN_USERNAME` | `admin` | Dashboard login (default `admin`) |
+| `ADMIN_PASSWORD` | 16+ characters | Dashboard password; required, no default |
 | `TEST_DATABASE_URL` | `…/payments_test` | Database for e2e tests; must differ from `DATABASE_URL` |
 | `TEST_REDIS_URL` | `redis://localhost:6380/1` | Redis database for e2e tests; must differ from `REDIS_URL` |
 
@@ -333,8 +361,8 @@ All settings come from environment variables (`.env` locally), validated at star
 ## Testing
 
 ```bash
-npm test            # 98 unit tests
-npm run test:e2e    # 53 end-to-end tests (needs `docker compose up -d`)
+npm test            # 132 unit tests
+npm run test:e2e    # 71 end-to-end tests (needs `docker compose up -d`)
 npm run lint
 npm run typecheck
 npm run build
@@ -343,7 +371,7 @@ npm run build
 - **Real infrastructure, isolated.** e2e tests run against their own PostgreSQL database (`payments_test`, created and migrated automatically) and their own Redis database. They refuse to start if pointed at the development database or a remote server.
 - **No network, no secrets.** Stripe is replaced by a fake client and webhook payloads are signed locally, so the suite runs offline and in CI.
 - **The key tests are proven to catch their bug.** Each was checked by breaking the code on purpose (dropping the job ID, skipping signature checks, an off-by-one in the retry count…) and watching it fail. The full list is in the [build log](docs/BUILD_LOG.md).
-- **Verified against real Stripe** at every stage since checkout: test payments with card 4242, `stripe trigger`, event redelivery, refunds, and a live database outage.
+- **Verified against real Stripe** at every stage since checkout: test payments with card 4242, `stripe trigger`, event redelivery, refunds, a live database outage, and a failed job retried from the dashboard.
 
 ## Project structure
 
@@ -352,11 +380,12 @@ src/
 ├── main.ts, app.module.ts, app.setup.ts   bootstrap, raw body, checkout pages
 ├── config/        environment validation (Joi): refuses to start misconfigured
 ├── prisma/        the single database client
-├── stripe/        the Stripe client, pinned API version
+├── stripe/        the Stripe client, pinned API version, logging wrapper for every call
 ├── checkout/      POST /checkout, course catalog, request validation
 ├── webhooks/      POST /webhooks/stripe: verify, store, enqueue
 ├── queue/         BullMQ queue and its retry settings
 ├── worker/        processor, event handler, status mapping functions
+├── admin/         Bull Board at /admin/queues and its Basic auth login
 └── health/        GET /health readiness check
 prisma/            schema and migrations (including hand-written CHECK constraints)
 public/            minimal checkout, success and cancel pages
@@ -373,7 +402,7 @@ The project is built in eight stages, each delivered as one reviewed pull reques
 - [x] **3. Test checkout**: orders and Stripe Checkout Sessions, minimal pages
 - [x] **4. Webhook endpoint**: signature check, store once, queue by event ID
 - [x] **5. Worker with retries**: latest-object processing, one transaction, 5 attempts with backoff
-- [ ] **6. Logging and dashboard**: every Stripe call logged; Bull Board behind a login to inspect and retry failed jobs
+- [x] **6. Logging and dashboard**: every Stripe call logged; Bull Board behind a login to inspect and retry failed jobs
 - [ ] **7. Daily reconciliation**: compare the last two days of Stripe checkouts with the database and repair anything missed
 - [ ] **8. CI and Docker**: GitHub Actions on every push; `docker compose up` starts API, worker, PostgreSQL and Redis
 
@@ -382,7 +411,8 @@ The project is built in eight stages, each delivered as one reviewed pull reques
 Honest edges of the current version, each with its planned answer:
 
 - **One currency (USD), card payments only.** Multiple currencies are out of scope; Stripe's Adaptive Pricing is turned off. Payment methods that settle days later aren't handled yet; reconciliation (stage 7) is the safety net.
-- **If PostgreSQL is still down on the 5th attempt**, the event can't be marked `FAILED` and stays `PENDING`; the failed job is visible in the dashboard (stage 6) and reconciliation catches the payment.
+- **If PostgreSQL is still down on the 5th attempt**, the event can't be marked `FAILED` and stays `PENDING`; the failed job is visible in the dashboard, where it can be retried, and reconciliation (stage 7) catches the payment.
+- **The dashboard login is HTTP Basic auth**: no logout, no lockout after wrong guesses, and outside localhost it must run behind HTTPS. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
 - **Amounts are 32-bit integers**: up to about $21 million per row, plenty for course sales.
 
 ## Further reading

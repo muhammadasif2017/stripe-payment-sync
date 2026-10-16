@@ -177,3 +177,51 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 
 - **Payment page options.** With Adaptive Pricing off the page shows $49.00 in USD only, but it also offered "Bank" and "Klarna" through Stripe Link, although the session is card-only (`payment_method_types: ["card"]`). Not tested. If a method that settles later were ever used, `checkout.session.completed` would arrive unpaid, no payment would be recorded and the order would stay `PENDING`; the daily reconciliation (stage 7) is the safety net, and `checkout.session.async_payment_succeeded` would need to be handled.
 - **Database down on the last attempt.** The event can't be marked `FAILED` if the database is still down at the 5th attempt; it stays `PENDING` while its job is failed in BullMQ. The failed job is visible in the dashboard (stage 6) and reconciliation (stage 7) catches the payment.
+
+## Stage 6: Logging and dashboard (2026-10-16)
+
+### What was built
+
+- **Task 1: Stripe call logging wrapper.** Each change and why:
+  - `src/stripe/stripe-calls.ts` (new): the brief asks for every Stripe call to be logged with the event ID, endpoint, status and duration. `StripeCalls.run(endpoint, context, call)` times one call and logs one line, such as `paymentIntents.retrieve event=evt_1 status=200 duration=213ms request=req_ok`. Failures are logged as warnings with the error type (`status=401 (StripeAuthenticationError)`), or `status=no response` when Stripe never answered, and the same error object is thrown again so the worker's retryable-vs-permanent check still works. Parameters, bodies and error messages are never logged, because a Checkout Session carries the customer's email.
+  - `src/stripe/stripe.module.ts`: provides and exports `StripeCalls` next to the client.
+  - `src/stripe/stripe-calls.spec.ts` (new): 8 unit tests, one per case.
+- **Task 2: Every Stripe call goes through the wrapper.** Each change and why:
+  - `src/checkout/checkout.service.ts`: `checkout.sessions.create` runs through `StripeCalls` with `order=<id>`, because no Stripe event exists yet at checkout.
+  - `src/worker/stripe-event-handler.ts`: `checkout.sessions.retrieve`, `paymentIntents.retrieve` and `refunds.list` run through `StripeCalls` with `event=<id>`. Refunds are now fetched page by page (`has_more` and `starting_after`, 100 per page) instead of with `autoPagingToArray`, so each page is one logged call. A safety limit of 100 pages stops a runaway loop.
+  - `src/checkout/checkout.service.spec.ts`, `test/stripe-event-handler.e2e-spec.ts`: pass a `StripeCalls` to the service and the handler. The fake Stripe client now returns refunds one page at a time like the real API. No existing expectation changed.
+  - `test/stripe-event-handler.e2e-spec.ts`: new test with 3 refunds on pages of 2; all 3 are recorded and 2 `refunds.list` log lines name the event.
+- **Task 3: Bull Board behind Basic auth.** Each change and why:
+  - `package.json`: `@bull-board/api`, `@bull-board/express`, `@bull-board/nestjs` at `9.10.4`, exact (the brief: "Mount Bull Board at /admin/queues"). Their peer `@nestjs/bull-shared` was already installed by `@nestjs/bullmq`. `npm audit` still reports the same 9 findings as before; none come from Bull Board.
+  - `src/admin/basic-auth.ts` (new): the login (the brief: "behind a login"). Parses `Authorization: Basic ...`, compares SHA-256 hashes of the user name and password with `timingSafeEqual`, and answers anything else with 401 and `WWW-Authenticate`, which makes the browser ask for a login. Rejected attempts are logged with IP and path, never with what was typed.
+  - `src/admin/admin.module.ts` (new): mounts Bull Board at `/admin/queues` for the `stripe-events` queue, with the login as Bull Board's own `middleware` option so it covers every path under the route.
+  - `src/app.module.ts`: imports `AdminModule`, in every process that serves HTTP (the dashboard needs Redis, not the worker).
+  - `src/config/env.validation.ts`, `.env.example`, `vitest.config.e2e.ts`: `ADMIN_USERNAME` (default `admin`, no colon) and `ADMIN_PASSWORD` (required, 16+ characters, value never printed). The e2e suite uses a fixed test password.
+  - `test/admin.e2e-spec.ts` (new): the page loads with the right login (proves the board is mounted), the queue is listed, 5 paths ask for a login without one, a wrong password is refused for pages and actions, a failed job is retried through the dashboard API, and cross-origin requests are not approved.
+  - `test/worker.e2e-spec.ts`: 3 tests for what the retry button does with a real worker (below).
+- **Task 4: Forced failure, dashboard retry, docs, and two fixes from review.** Each change and why:
+  - `README.md` (dashboard walkthrough, settings, known limits), `CLAUDE.md` (dashboard URL, `StripeCalls` rule, Stripe CLI path, Prettier width), and these docs.
+  - `.env.example`: `ADMIN_PASSWORD` is now empty. The placeholder `replace-with-16-or-more-characters` was 34 characters long, so it passed validation: anyone who copied the file and forgot to change it would have run the dashboard with a password published in the repository. An empty value fails validation, so the app refuses to start until a real password is set. `src/config/env.validation.spec.ts` gains a test for the empty value.
+  - `src/admin/same-origin.ts` (new) and `src/admin/admin.module.ts`: after the login, any request that changes something (not GET, HEAD or OPTIONS) is refused with 403 when the browser marks it as coming from another site (`Sec-Fetch-Site` other than `same-origin` or `none`, or an `Origin` that doesn't match the host). See "Cross-site form posts" below.
+  - `src/admin/same-origin.spec.ts` (new): 10 unit tests. `test/admin.e2e-spec.ts`: a forged cross-site form POST to "add job" gets 403 and adds nothing; a same-origin pause and resume are allowed.
+
+### Problems and fixes
+
+- **Prettier and the 80-column default, again.** Running Prettier on a changed file rewrapped unrelated lines at 80 columns. Reverted, then formatted with `--print-width 100`, which matches the existing code.
+- **What the retry button does to attempt counts.** Bull Board's retry handler calls `job.retry(state)` without BullMQ's `resetAttemptsMade` option, so `attemptsMade` stays at 5. A manual retry is attempt 6: the processor sees it as the last attempt, so it gets one try and no automatic retries. On success the event shows `attempts = 6`; on failure it is `FAILED` again with `attempts = 6`. The history is kept, and a manual retry can't start another 2.5 minutes of retries. Retrying a completed job is harmless: the processor skips events already `PROCESSED`.
+- **Cross-site form posts.** The plan assumed CSRF was covered because Bull Board's actions are `PUT` requests with JSON, which a browser only sends cross-site after a CORS preflight the app never approves. Review pointed out two `POST` routes (`add` and `metrics/history/purge`). A test sent what a form on another site would send (`POST .../add`, `text/plain` body, valid Basic credentials): Bull Board answered 200 and added a job with no data. Basic credentials are re-sent by the browser automatically, so that request is possible from any website an admin visits. Fixed with the same-origin check above; the test now gets 403 and no job is added, and removing the check makes it fail again.
+- **Bull Board can also add, change and delete jobs.** Its API includes "add job", "update job data", "empty queue" and "obliterate". Its read-only mode would hide the retry button too, so it stays off; the login is the protection. A deleted job loses nothing: the event row stays in `stripe_events`, and stage 7's reconciliation re-queues missing payments.
+- **Stripe's own `response` event was not enough.** The library emits `request` and `response` events, which would log every call with no changes where Stripe is called. Reading the installed `RequestSender.js` showed that a connection error or timeout never emits `response`, and the event can't know which Stripe event a call belongs to. A wrapper sees every outcome and gets the event ID passed in plainly.
+
+### Verified
+
+- Task 1: 8 new unit tests pass. Swallowing the error instead of rethrowing it fails 3 of them.
+- Task 2: 106 unit tests and 54 e2e tests pass. Stopping after the first page of refunds fails the new pagination test.
+- Task 3: 121 unit tests and 69 e2e tests pass. Removing the login middleware fails 6 dashboard tests. The test that loads the page with the right login matters as much as the 401 tests: a board that silently wasn't mounted would answer 404, and "not 200" alone would look like a working login.
+- Task 4, the "Done when" with real Stripe:
+  - The API ran with `WORKER_ENABLED=false` and `stripe listen`. A checkout paid with card 4242 logged `checkout.sessions.create order=9b9d90ea-… status=200 duration=875ms request=req_BHn5…` and stored `evt_1UR5EiGImTS0y0GhR9DZONIG` with its job waiting.
+  - A worker started on port 3001 with `STRIPE_SECRET_KEY=sk_test_wrong`. Each of the 5 attempts logged `checkout.sessions.retrieve event=evt_1UR5Ei… status=401 (StripeAuthenticationError)`, 10, 20, 40 and 80 seconds apart. The event ended `FAILED` with `attempts = 5` and "Invalid API Key provided: sk_test_*rong".
+  - `/admin/queues` answered 401 with no login and with a wrong password (logged as a rejected login), and 200 with the password from `.env`. In the browser the job was in the **Failed** list with its error and "attempt #5".
+  - The worker restarted with the real key. Clicking **Retry** (then **Confirm**) ran attempt 6: `checkout.sessions.retrieve … status=200 duration=812ms request=req_hUQZ…`. The event is `PROCESSED` with `attempts = 6`, the payment `SUCCEEDED` (4900 cents), the order `PAID`.
+  - The 401 log lines have no Stripe request ID: Stripe's authentication errors don't carry one. The line still shows status, error type and duration.
+- Task 4 fixes: 132 unit tests and 71 e2e tests pass; lint, type check and build are clean. Bypassing the same-origin check fails the cross-site test.
