@@ -9,6 +9,8 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET: string;
   /** Public base URL of this app, used for Stripe's success and cancel redirects. */
   APP_URL: string;
+  /** Whether this process runs the background worker for Stripe events. */
+  WORKER_ENABLED: boolean;
 }
 
 // Custom messages keep secret values out of errors; Joi's default pattern message prints the value.
@@ -34,6 +36,8 @@ const envSchema = Joi.object<Env>({
     .pattern(/[^/]$/)
     .required()
     .messages({ 'string.pattern.base': '{#label} must not end with a slash' }),
+  // Only true or false: a typo like "flase" stops startup instead of silently running a worker.
+  WORKER_ENABLED: Joi.boolean().default(true),
 });
 
 /**

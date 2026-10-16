@@ -180,3 +180,9 @@ Two jobs for the same order can run at the same time, for example the payment an
 
 **Which errors are retried and which are not?**
 Retried: the database being down, network errors, Stripe rate limits and Stripe server errors, because they pass. Not retried: an event with no matching order, an amount or currency that doesn't match the order, or Stripe saying the object doesn't exist. Retrying those would fail five times in a row and hide the real problem, so they fail at once with the reason saved for someone to look at.
+
+**How do you know which attempt is the last one?**
+BullMQ's `attemptsMade` counts the attempts that already failed, so the running attempt is `attemptsMade + 1`; when that equals the job's `attempts` (5), no retry follows and the event is marked `FAILED`. A test makes the database fail on every attempt and checks the event ends `FAILED` with `attempts = 5`; counting off by one makes that test fail.
+
+**Why can the worker be switched off?**
+The API must answer Stripe fast, while the worker can be slow and retry. Running them as separate processes (same code, `WORKER_ENABLED=false` for the API) means a backlog of jobs never slows the webhook, and each can be scaled or restarted on its own. Stage 8's Docker Compose starts both.

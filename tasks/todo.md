@@ -48,16 +48,16 @@
 **Description:** The worker that consumes `stripe-events`, records each attempt, and lets BullMQ retry.
 
 **Acceptance criteria:**
-- [ ] `@Processor(STRIPE_EVENTS_QUEUE)` with concurrency 5, enabled by `WORKER_ENABLED` (default true, validated)
-- [ ] e2e config sets `WORKER_ENABLED=false` and a dummy `STRIPE_SECRET_KEY`; only the worker e2e file starts the worker, with a fake Stripe client
-- [ ] Already `PROCESSED` events are skipped
-- [ ] Each failure saves `attempts` and `last_error`; `FAILED` after the last attempt or a permanent error; other attempts stay `PENDING`
-- [ ] Failures to save the error are logged, never thrown over the original error
+- [x] `@Processor(STRIPE_EVENTS_QUEUE)` with concurrency 5, enabled by `WORKER_ENABLED` (default true, validated)
+- [x] e2e config sets `WORKER_ENABLED=false` and a dummy `STRIPE_SECRET_KEY`; only the worker e2e file starts the worker, with a fake Stripe client
+- [x] Already `PROCESSED` events are skipped
+- [x] Each failure saves `attempts` and `last_error`; `FAILED` after the last attempt or a permanent error; other attempts stay `PENDING`
+- [x] Failures to save the error are logged, never thrown over the original error
 
 **Verification:**
-- [ ] e2e with a real BullMQ worker on the test Redis: a job whose first database attempt fails is retried and completes; the event shows the saved error and then `PROCESSED`
-- [ ] e2e: a permanent error fails at once, without retries
-- [ ] e2e: a retryable error on every attempt ends with the event `FAILED` and `attempts = 5` (short fixed backoff on the test job)
+- [x] e2e with a real BullMQ worker on the test Redis: a job whose first database attempt fails is retried and completes; the event shows the saved error and then `PROCESSED`
+- [x] e2e: a permanent error fails at once, without retries
+- [x] e2e: a retryable error on every attempt ends with the event `FAILED` and `attempts = 5` (short fixed backoff on the test job)
 
 **Dependencies:** Task 2
 
@@ -66,7 +66,7 @@
 **Estimated scope:** Medium
 
 ## Checkpoint: Worker complete
-- [ ] Tasks 1–3 verified, all five checks pass, commit
+- [x] Tasks 1–3 verified, all five checks pass, commit
 
 ## Task 4: Database-outage check, docs and pull request
 
