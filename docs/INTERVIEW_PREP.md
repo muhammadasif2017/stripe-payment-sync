@@ -186,3 +186,9 @@ BullMQ's `attemptsMade` counts the attempts that already failed, so the running 
 
 **Why can the worker be switched off?**
 The API must answer Stripe fast, while the worker can be slow and retry. Running them as separate processes (same code, `WORKER_ENABLED=false` for the API) means a backlog of jobs never slows the webhook, and each can be scaled or restarted on its own. Stage 8's Docker Compose starts both.
+
+**Show me the retries working.**
+With the database stopped, the worker's jobs failed and BullMQ scheduled them again after 10 s and 20 s. When PostgreSQL came back, the next attempt finished the work: payment recorded, order `PAID`, event `PROCESSED` with `attempts = 4`. Nothing was lost because the event was already stored and the job was in Redis, not in the app's memory.
+
+**What if the database is still down on the last attempt?**
+The job fails in BullMQ, but the event can't be marked `FAILED` because the database is the problem; it stays `PENDING`. The failed job shows in the dashboard with a retry button (stage 6), and the daily reconciliation (stage 7) compares Stripe with the database and queues anything missed. Retries handle short outages; reconciliation handles the rest.

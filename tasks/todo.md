@@ -73,14 +73,14 @@
 **Description:** Run the "Done when" for real, process the two events waiting since stage 4, document, open the PR.
 
 **Acceptance criteria:**
-- [ ] With PostgreSQL stopped, a real event's job fails and is retried; after PostgreSQL starts, it completes (event `PROCESSED`, `attempts` > 1, order `PAID`)
-- [ ] A refund made in the Stripe test dashboard (or with the CLI) arrives and turns the order `PARTIALLY_REFUNDED` or `REFUNDED`
-- [ ] The stage 4 events: the real one makes its order `PAID`; the `stripe trigger` one is `FAILED` with "no matching order"
-- [ ] `README.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md` (fetch latest object, computed status, row lock, retryable vs permanent errors)
-- [ ] PR from `stage-5-worker` to `main`
+- [x] With PostgreSQL stopped, a real event's job fails and is retried; after PostgreSQL starts, it completes (event `PROCESSED`, `attempts` > 1, order `PAID`)
+- [x] A refund made in the Stripe test dashboard (or with the CLI) arrives and turns the order `PARTIALLY_REFUNDED` or `REFUNDED`
+- [x] The stage 4 events: the real one makes its order `PAID`; the `stripe trigger` one is `FAILED` with "no matching order"
+- [x] `README.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md` (fetch latest object, computed status, row lock, retryable vs permanent errors)
+- [x] PR from `stage-5-worker` to `main`
 
 **Verification:**
-- [ ] Manual check with Docker, the Stripe CLI and database queries
+- [x] Manual check with Docker, the Stripe CLI and database queries
 
 **Dependencies:** Task 3
 
@@ -89,7 +89,7 @@
 **Estimated scope:** Small to medium
 
 ## Checkpoint: Stage 5 complete
-- [ ] All five checks pass
-- [ ] Stage 5 "Done when" from `PROJECT.md` met
-- [ ] Commit, push, open PR
+- [x] All five checks pass
+- [x] Stage 5 "Done when" from `PROJECT.md` met
+- [x] Commit, push, open PR
 - [ ] Human review and merge before stage 6

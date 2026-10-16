@@ -4,7 +4,7 @@
 
 A NestJS backend that receives Stripe payment events, processes them through a Redis job queue with retries, and keeps a PostgreSQL database in sync. The full scope and build plan are in [`PROJECT.md`](PROJECT.md).
 
-**Status:** stage 4 of 8 (webhook endpoint). A minimal checkout page creates an order and sends the customer to Stripe's test-mode payment page. `POST /webhooks/stripe` verifies each Stripe event's signature, stores the events the system handles once, and queues them in Redis (BullMQ) for processing. The worker that updates orders arrives in stage 5, so orders stay `PENDING` and jobs wait in the queue for now.
+**Status:** stage 5 of 8 (worker with retries). A minimal checkout page creates an order and sends the customer to Stripe's test-mode payment page. `POST /webhooks/stripe` verifies, stores and queues each Stripe event; a BullMQ worker fetches the latest payment, session or refunds from Stripe and updates the order, payment and refunds in one transaction, retrying up to 5 times with exponential backoff. Orders become `PAID`, `PAYMENT_FAILED`, `EXPIRED`, `PARTIALLY_REFUNDED` or `REFUNDED` from Stripe's events, never from the success page.
 
 ## Data model
 
@@ -112,6 +112,8 @@ In PowerShell: `$env:STRIPE_API_KEY = (Select-String '^STRIPE_SECRET_KEY=(.*)' .
    ```bash
    stripe trigger checkout.session.completed
    ```
+
+The worker runs inside the API process by default and updates the order a moment after the event arrives. To run them as separate processes, start the API with `WORKER_ENABLED=false` and a second copy with `WORKER_ENABLED=true` and another `PORT`. Failed attempts are retried after 10, 20, 40 and 80 seconds; each failure is saved on the event (`attempts`, `last_error`), and after the 5th, or at once for an error a retry can't fix (such as an event with no matching order), the event is marked `FAILED`.
 
 Every event gets 200. Only the types the system handles (`checkout.session.completed`, `checkout.session.expired`, `payment_intent.payment_failed`, `payment_intent.canceled`, `charge.refunded`, `refund.updated`) are stored in `stripe_events` and queued, once each, with the Stripe event ID as both the row ID and the job ID. A request with a missing or wrong signature gets 400 and nothing is saved.
 
