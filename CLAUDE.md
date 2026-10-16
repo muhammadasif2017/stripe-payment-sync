@@ -15,7 +15,7 @@ NestJS 12 (ES modules), TypeScript strict, Prisma 7.10.0 with `@prisma/adapter-p
 - Start databases: `docker compose up -d` (PostgreSQL on 5435, Redis on 6380, both 127.0.0.1 only)
 - Dev server: `npm run start:dev` (API and worker; `WORKER_ENABLED=false` for API only)
 - Queue dashboard: `http://localhost:3000/admin/queues`, Basic auth with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`
-- Reconciliation: runs daily (`RECONCILIATION_CRON`, UTC) in the worker; start one by hand with **Schedulers > Run now** on the dashboard
+- Reconciliation: runs daily (`RECONCILIATION_CRON`, UTC) in the worker; start one by hand with **Schedulers > Run now** on the dashboard. Change the schedule in the setting, not on the dashboard: every worker start re-registers it.
 - Unit tests: `npm test`
 - e2e tests: `npm run test:e2e` (needs the databases; runs against `payments_test`)
 - Lint / types / build: `npm run lint`, `npm run typecheck`, `npm run build`

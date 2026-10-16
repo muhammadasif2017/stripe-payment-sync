@@ -265,13 +265,13 @@ docker compose exec postgres psql -U payments -d payments \
   -c "delete from payments where stripe_payment_intent_id = 'pi_...'"   # one without refunds
 ```
 
-On the dashboard, open **Schedulers**, and click **Run now** on `daily-reconciliation`. The log shows:
+On the dashboard, open **Schedulers**, and click **Run now** on `daily-reconciliation`. The log shows something like:
 
 ```text
-LOG  [StripeCalls] checkout.sessions.list job=reconciliation status=200 duration=1017ms request=req_8GDJ…
+LOG  [StripeCalls] checkout.sessions.list job=reconciliation status=200 duration=1017ms request=req_…
 LOG  [ReconciliationService] Reconciliation: checked 5 completed sessions, 1 missing and queued, 3 already recorded, skipped 0 not paid, 1 without order ID, 0 with unknown order
-WARN [ReconciliationService] Payment missing for Checkout Session cs_test_a1sC…; repair queued
-LOG  [StripeEventsProcessor] Repaired Checkout Session cs_test_a1sC… (attempt 1)
+WARN [ReconciliationService] Payment missing for Checkout Session cs_test_…; repair queued
+LOG  [StripeEventsProcessor] Repaired Checkout Session cs_test_… (attempt 1)
 ```
 
 The payment row is back (with a new row ID), and the order status is recomputed. A second run finds nothing missing.
@@ -435,6 +435,9 @@ Honest edges of the current version, each with its planned answer:
 
 - **One currency (USD), card payments only.** Multiple currencies are out of scope; Stripe's Adaptive Pricing is turned off. Payment methods that settle days later aren't handled by the webhook; reconciliation records them once Stripe reports the session paid, within its 2-day window.
 - **If PostgreSQL is still down on the 5th attempt**, the event can't be marked `FAILED` and stays `PENDING`; the failed job is visible in the dashboard, where it can be retried, and the next reconciliation records the payment.
+- **A repair fixes the payment, not the event history.** If reconciliation records a payment whose webhook event got stuck, that `stripe_events` row stays `PENDING` (or `FAILED`) and its job stays in the dashboard's Failed list.
+- **A paid session whose amount or currency doesn't match its order** is found missing on every run, and its repair fails permanently each time: one new failed job a day until someone looks. Rare with one currency and Adaptive Pricing off.
+- **Schedule changes belong in `RECONCILIATION_CRON`.** "Edit schedule" or "Remove scheduler" on the dashboard is undone at the next worker start, which re-registers the scheduler from the setting.
 - **Reconciliation looks back 2 days.** A gap older than that (say, an outage over a long weekend plus a missed run) needs a manual look. It repairs payments, never creates orders: a paid session whose order is gone is counted and logged, not recreated.
 - **The dashboard login is HTTP Basic auth**: no logout, no lockout after wrong guesses, and outside localhost it must run behind HTTPS. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
 - **Amounts are 32-bit integers**: up to about $21 million per row, plenty for course sales.
