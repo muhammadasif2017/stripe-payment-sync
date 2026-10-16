@@ -1,96 +1,95 @@
-# Stage 4 – Webhook Endpoint: Tasks
+# Stage 5 – Worker with Retries: Tasks
 
-## Task 1: BullMQ queue and test Redis
+## Task 1: Mapping functions
 
-**Description:** Connect to Redis and register the `stripe-events` queue with its retry settings. Give the e2e tests their own Redis database.
+**Description:** Pure functions, no database or network: Stripe payment intent status to payment status, Stripe refund status to refund status, and the order status from an order's payments and refunds.
 
 **Acceptance criteria:**
-- [x] `bullmq@6.3.10`, `@nestjs/bullmq@12.0.0` and `ioredis` installed with exact versions
-- [x] `QueueModule` registers the `stripe-events` queue from `REDIS_URL`: 5 attempts, exponential backoff, completed jobs kept 7 days, failed jobs kept
-- [x] `TEST_REDIS_URL` in `.env.example` (database 1); the e2e config points `REDIS_URL` at it and refuses the same database as `REDIS_URL`
-- [x] A shared `test/create-test-app.ts` builds the app the way `main.ts` does (raw body, checkout pages), so e2e tests can't drift from it
+- [ ] `toPaymentStatus(paymentIntent)`: `succeeded` → `SUCCEEDED`, `canceled` → `CANCELED`, a failed attempt → `FAILED`, still in progress → no row
+- [ ] `toRefundStatus(refund)`: `pending`/`requires_action` → `PENDING`, `succeeded`, `failed`, `canceled`
+- [ ] `deriveOrderStatus(...)`: `PAID`, `PARTIALLY_REFUNDED`, `REFUNDED` from paid vs refunded amounts; `EXPIRED` (sticky once the checkout expired) and `PAYMENT_FAILED` only when nothing was paid; otherwise `PENDING`
+- [ ] Refunds above the paid amount throw
 
 **Verification:**
-- [x] e2e: adding two jobs with the same job ID leaves 1 job; the queue's default options are the ones above
-- [x] Unit tests for the Redis test-URL guard
-- [x] All five checks pass
+- [ ] Unit tests for every branch; prove one can fail
 
 **Dependencies:** None
 
-**Files likely touched:** `package.json`, `src/queue/queue.module.ts`, `src/app.module.ts`, `vitest.config.e2e.ts`, `test/test-redis.ts`, `test/create-test-app.ts`, `.env.example`
+**Files likely touched:** `src/worker/mapping.ts`, `src/worker/mapping.spec.ts`
 
-**Estimated scope:** Medium
+**Estimated scope:** Small
 
-## Task 2: Webhook endpoint with signature check
+## Task 2: Event handlers and the transaction
 
-**Description:** `POST /webhooks/stripe` verifies the `Stripe-Signature` header against the raw body with `STRIPE_WEBHOOK_SECRET`.
+**Description:** For each handled event type, fetch the latest object from Stripe and apply it to the database in one transaction with the order row locked.
 
 **Acceptance criteria:**
-- [x] `rawBody: true` in `main.ts` and in the test app
-- [x] Missing header, wrong signature, wrong secret, old timestamp or a tampered body: 400, nothing saved, no job
-- [x] Live-mode event: 400, nothing saved
-- [x] The cause is logged; the response says only that the signature is invalid
+- [ ] Order found from `metadata.order_id`; missing or unknown order is a permanent error
+- [ ] Currency or amount different from the order's is a permanent error
+- [ ] Payments and refunds upserted by Stripe ID; order status recomputed; event marked `PROCESSED` in the same transaction
+- [ ] Adaptive Pricing turned off in the Checkout Session (decision 1); the stage 3 unit test updated
+- [ ] Stripe errors classified by type: invalid request is permanent; rate limit, connection and API errors are retried
 
 **Verification:**
-- [x] e2e tests with payloads signed by `generateTestHeaderString`
-- [x] Prove a test can fail (e.g. skip the check)
+- [ ] e2e tests against the test database with a fake Stripe client: each event type, the same event twice, events out of order (refund before payment; canceled after expired stays `EXPIRED`), a late `payment_failed` for a payment intent that has since succeeded, a missing order
+- [ ] Prove a test can fail (e.g. drop the lock or the upsert)
 
 **Dependencies:** Task 1
 
-**Files likely touched:** `src/webhooks/webhooks.module.ts`, `webhooks.controller.ts`, `src/main.ts`, `test/webhooks.e2e-spec.ts`
+**Files likely touched:** `src/worker/stripe-event-handler.ts`, `src/checkout/checkout.service.ts`, `test/worker.e2e-spec.ts`
 
-**Estimated scope:** Small to medium
+**Estimated scope:** Medium to large
 
-## Checkpoint: Queue and signature
-- [x] Tasks 1–2 verified, all five checks pass, commit
+## Checkpoint: Processing logic
+- [ ] Tasks 1–2 verified, all five checks pass, commit
 
-## Task 3: Store the event and enqueue it
+## Task 3: BullMQ processor, retries and error recording
 
-**Description:** After the signature check, save the event and add one job, then answer 200.
+**Description:** The worker that consumes `stripe-events`, records each attempt, and lets BullMQ retry.
 
 **Acceptance criteria:**
-- [x] Handled types (decision 1) are stored with `id`, `type`, `payload`, `stripeCreatedAt`, status `PENDING`; other types get 200 and are not stored
-- [x] Job `{ eventId }` with `jobId = event.id`
-- [x] A duplicate delivery returns 200 and leaves 1 row and 1 job
-- [x] If the insert or the enqueue fails: 500 (Stripe retries); a retry after a failed enqueue adds the job
+- [ ] `@Processor(STRIPE_EVENTS_QUEUE)` with concurrency 5, enabled by `WORKER_ENABLED` (default true, validated)
+- [ ] e2e config sets `WORKER_ENABLED=false` and a dummy `STRIPE_SECRET_KEY`; only the worker e2e file starts the worker, with a fake Stripe client
+- [ ] Already `PROCESSED` events are skipped
+- [ ] Each failure saves `attempts` and `last_error`; `FAILED` after the last attempt or a permanent error; other attempts stay `PENDING`
+- [ ] Failures to save the error are logged, never thrown over the original error
 
 **Verification:**
-- [x] e2e: valid event gives 1 row + 1 job; same event twice gives 1 + 1; unhandled type gives 0 + 0; enqueue failure gives 500 and a later redelivery gives 1 + 1
-- [x] Unit tests for the service's duplicate and failure paths
-- [x] Prove a test can fail (e.g. drop the job ID)
+- [ ] e2e with a real BullMQ worker on the test Redis: a job whose first database attempt fails is retried and completes; the event shows the saved error and then `PROCESSED`
+- [ ] e2e: a permanent error fails at once, without retries
+- [ ] e2e: a retryable error on every attempt ends with the event `FAILED` and `attempts = 5` (short fixed backoff on the test job)
 
 **Dependencies:** Task 2
 
-**Files likely touched:** `src/webhooks/webhooks.service.ts`, `src/webhooks/handled-events.ts`, tests
+**Files likely touched:** `src/worker/stripe-events.processor.ts`, `src/worker/worker.module.ts`, `src/config/env.validation.ts`, `.env.example`, tests
 
 **Estimated scope:** Medium
 
-## Checkpoint: Endpoint complete
-- [x] Tasks 1–3 verified, all five checks pass, commit
+## Checkpoint: Worker complete
+- [ ] Tasks 1–3 verified, all five checks pass, commit
 
-## Task 4: Real Stripe check, docs and pull request
+## Task 4: Database-outage check, docs and pull request
 
-**Description:** Run the "Done when" with the Stripe CLI in test mode, record it, open the PR.
+**Description:** Run the "Done when" for real, process the two events waiting since stage 4, document, open the PR.
 
 **Acceptance criteria:**
-- [x] `STRIPE_WEBHOOK_SECRET` in `.env` set from `stripe listen --print-secret` (test key, value never printed)
-- [x] `stripe listen --forward-to localhost:3000/webhooks/stripe` + `stripe trigger checkout.session.completed`: 1 `checkout.session.completed` row, 1 job with the same ID
-- [x] A request with a wrong signature returns 400
-- [x] A real checkout from stage 3 paid with card 4242 also arrives as an event
-- [x] `README.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md` (BullMQ, Redis, raw body), `docs/INTERVIEW_PREP.md` (why raw body, why answer fast, why job ID = event ID, what happens when each step fails)
-- [x] PR from `stage-4-webhook-endpoint` to `main`
+- [ ] With PostgreSQL stopped, a real event's job fails and is retried; after PostgreSQL starts, it completes (event `PROCESSED`, `attempts` > 1, order `PAID`)
+- [ ] A refund made in the Stripe test dashboard (or with the CLI) arrives and turns the order `PARTIALLY_REFUNDED` or `REFUNDED`
+- [ ] The stage 4 events: the real one makes its order `PAID`; the `stripe trigger` one is `FAILED` with "no matching order"
+- [ ] `README.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md` (fetch latest object, computed status, row lock, retryable vs permanent errors)
+- [ ] PR from `stage-5-worker` to `main`
 
 **Verification:**
-- [x] Manual check with the Stripe CLI, database query and queue count
+- [ ] Manual check with Docker, the Stripe CLI and database queries
 
 **Dependencies:** Task 3
 
 **Files likely touched:** `README.md`, `docs/*.md`
 
-**Estimated scope:** Small
+**Estimated scope:** Small to medium
 
-## Checkpoint: Stage 4 complete
-- [x] All five checks pass
-- [x] Stage 4 "Done when" from `PROJECT.md` met
-- [x] Commit, push, open PR
-- [ ] Human review and merge before stage 5
+## Checkpoint: Stage 5 complete
+- [ ] All five checks pass
+- [ ] Stage 5 "Done when" from `PROJECT.md` met
+- [ ] Commit, push, open PR
+- [ ] Human review and merge before stage 6
