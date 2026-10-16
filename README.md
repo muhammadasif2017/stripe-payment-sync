@@ -143,6 +143,7 @@ The brief asks this directly. The answer is four independent layers, each enforc
 | All 5 attempts fail | Event marked `FAILED` with `attempts = 5` and the last error; the job waits in the dashboard's **Failed** list with a retry button |
 | A Stripe call fails | One warning line with the endpoint, event ID, HTTP status (or `no response`), error type and duration |
 | The customer closes the tab after paying | Nothing breaks: the webhook, not the browser, marks the order `PAID` |
+| A webhook never arrives, or a payment row is lost | The daily reconciliation compares the last 2 days of paid Stripe checkouts with the database and queues a repair for each missing payment |
 
 ## Quick start
 
@@ -255,6 +256,26 @@ WARN [StripeEventsProcessor] Event evt_1UR5Ei… failed on attempt 5 (giving up)
 
 A manual retry is one extra attempt (attempt 6), not five more. Retrying a job that already completed changes nothing: the worker skips events already `PROCESSED`.
 
+### 6. Lose a payment and let reconciliation find it
+
+Reconciliation runs every day at 03:00 UTC (`RECONCILIATION_CRON`). To see it work, delete a payment from your development database and start a run by hand:
+
+```bash
+docker compose exec postgres psql -U payments -d payments \
+  -c "delete from payments where stripe_payment_intent_id = 'pi_...'"   # one without refunds
+```
+
+On the dashboard, open **Schedulers**, and click **Run now** on `daily-reconciliation`. The log shows:
+
+```text
+LOG  [StripeCalls] checkout.sessions.list job=reconciliation status=200 duration=1017ms request=req_8GDJ…
+LOG  [ReconciliationService] Reconciliation: checked 5 completed sessions, 1 missing and queued, 3 already recorded, skipped 0 not paid, 1 without order ID, 0 with unknown order
+WARN [ReconciliationService] Payment missing for Checkout Session cs_test_a1sC…; repair queued
+LOG  [StripeEventsProcessor] Repaired Checkout Session cs_test_a1sC… (attempt 1)
+```
+
+The payment row is back (with a new row ID), and the order status is recomputed. A second run finds nothing missing.
+
 ## API
 
 | Method | Path | Body | Response |
@@ -353,6 +374,7 @@ All settings come from environment variables (`.env` locally), validated at star
 | `WORKER_ENABLED` | `true` | `false` runs the API only, so API and worker can run as separate processes |
 | `ADMIN_USERNAME` | `admin` | Dashboard login (default `admin`) |
 | `ADMIN_PASSWORD` | 16+ characters | Dashboard password; required, no default |
+| `RECONCILIATION_CRON` | `0 3 * * *` | When the daily reconciliation runs, as a 5-field cron pattern in UTC |
 | `TEST_DATABASE_URL` | `…/payments_test` | Database for e2e tests; must differ from `DATABASE_URL` |
 | `TEST_REDIS_URL` | `redis://localhost:6380/1` | Redis database for e2e tests; must differ from `REDIS_URL` |
 
@@ -361,8 +383,8 @@ All settings come from environment variables (`.env` locally), validated at star
 ## Testing
 
 ```bash
-npm test            # 132 unit tests
-npm run test:e2e    # 71 end-to-end tests (needs `docker compose up -d`)
+npm test            # 147 unit tests
+npm run test:e2e    # 87 end-to-end tests (needs `docker compose up -d`)
 npm run lint
 npm run typecheck
 npm run build
@@ -371,7 +393,7 @@ npm run build
 - **Real infrastructure, isolated.** e2e tests run against their own PostgreSQL database (`payments_test`, created and migrated automatically) and their own Redis database. They refuse to start if pointed at the development database or a remote server.
 - **No network, no secrets.** Stripe is replaced by a fake client and webhook payloads are signed locally, so the suite runs offline and in CI.
 - **The key tests are proven to catch their bug.** Each was checked by breaking the code on purpose (dropping the job ID, skipping signature checks, an off-by-one in the retry count…) and watching it fail. The full list is in the [build log](docs/BUILD_LOG.md).
-- **Verified against real Stripe** at every stage since checkout: test payments with card 4242, `stripe trigger`, event redelivery, refunds, a live database outage, and a failed job retried from the dashboard.
+- **Verified against real Stripe** at every stage since checkout: test payments with card 4242, `stripe trigger`, event redelivery, refunds, a live database outage, a failed job retried from the dashboard, and a deleted payment restored by reconciliation.
 
 ## Project structure
 
@@ -386,6 +408,7 @@ src/
 ├── queue/         BullMQ queue and its retry settings
 ├── worker/        processor, event handler, status mapping functions
 ├── admin/         Bull Board at /admin/queues and its Basic auth login
+├── reconciliation/ daily run: find paid checkouts missing from the database, queue repairs
 └── health/        GET /health readiness check
 prisma/            schema and migrations (including hand-written CHECK constraints)
 public/            minimal checkout, success and cancel pages
@@ -403,15 +426,16 @@ The project is built in eight stages, each delivered as one reviewed pull reques
 - [x] **4. Webhook endpoint**: signature check, store once, queue by event ID
 - [x] **5. Worker with retries**: latest-object processing, one transaction, 5 attempts with backoff
 - [x] **6. Logging and dashboard**: every Stripe call logged; Bull Board behind a login to inspect and retry failed jobs
-- [ ] **7. Daily reconciliation**: compare the last two days of Stripe checkouts with the database and repair anything missed
+- [x] **7. Daily reconciliation**: compare the last two days of Stripe checkouts with the database and repair anything missed
 - [ ] **8. CI and Docker**: GitHub Actions on every push; `docker compose up` starts API, worker, PostgreSQL and Redis
 
 ## Known limits
 
 Honest edges of the current version, each with its planned answer:
 
-- **One currency (USD), card payments only.** Multiple currencies are out of scope; Stripe's Adaptive Pricing is turned off. Payment methods that settle days later aren't handled yet; reconciliation (stage 7) is the safety net.
-- **If PostgreSQL is still down on the 5th attempt**, the event can't be marked `FAILED` and stays `PENDING`; the failed job is visible in the dashboard, where it can be retried, and reconciliation (stage 7) catches the payment.
+- **One currency (USD), card payments only.** Multiple currencies are out of scope; Stripe's Adaptive Pricing is turned off. Payment methods that settle days later aren't handled by the webhook; reconciliation records them once Stripe reports the session paid, within its 2-day window.
+- **If PostgreSQL is still down on the 5th attempt**, the event can't be marked `FAILED` and stays `PENDING`; the failed job is visible in the dashboard, where it can be retried, and the next reconciliation records the payment.
+- **Reconciliation looks back 2 days.** A gap older than that (say, an outage over a long weekend plus a missed run) needs a manual look. It repairs payments, never creates orders: a paid session whose order is gone is counted and logged, not recreated.
 - **The dashboard login is HTTP Basic auth**: no logout, no lockout after wrong guesses, and outside localhost it must run behind HTTPS. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
 - **Amounts are 32-bit integers**: up to about $21 million per row, plenty for course sales.
 

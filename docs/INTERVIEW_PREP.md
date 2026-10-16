@@ -244,3 +244,7 @@ BullMQ ignores a job whose ID already exists, and completed jobs are kept for 7 
 
 **What does Stripe's `created` filter take?**
 Unix seconds. JavaScript dates are in milliseconds, and passing milliseconds would ask for sessions created thousands of years from now: the run would quietly find nothing. A unit test pins the exact number for a known date, and an e2e test checks what was sent to Stripe.
+
+**Show me reconciliation working.**
+A payment row was deleted from the development database, then "Run now" was pressed on the dashboard. The run listed 5 completed sessions from Stripe, found 2 paid sessions without a payment, and queued 2 repairs, which completed within a second. One was the deleted row. The other was a real gap nobody had planted: a test payment from before the webhook existed, whose order had sat at `PENDING` for a day. A second run found nothing missing. It is a good example of why the check exists: the webhook path had no way to know about that payment.
+

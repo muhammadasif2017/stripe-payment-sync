@@ -76,13 +76,13 @@
 **Description:** Run the "Done when" for real (the delete approved in decision 3), document, open the PR.
 
 **Acceptance criteria:**
-- [ ] Payment row saved, deleted, reconciliation run from the dashboard, row back with the same payment intent, amount, currency and status; order `PAID`
-- [ ] Summary log shows 1 missing, 1 queued, the `stripe trigger` session skipped; a second run queues nothing
-- [ ] `README.md`, `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md` (why reconciliation, why not re-queue events, the selection rule, job schedulers)
+- [x] Payment row saved, deleted, reconciliation run from the dashboard, row back with the same payment intent, amount, currency and status; order `PAID`
+- [x] Summary log shows 1 missing, 1 queued, the `stripe trigger` session skipped; a second run queues nothing
+- [x] `README.md`, `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md` (why reconciliation, why not re-queue events, the selection rule, job schedulers)
 - [ ] PR from `stage-7-reconciliation` to `main`
 
 **Verification:**
-- [ ] Manual check with Docker, the browser and database queries
+- [x] Manual check with Docker, the browser and database queries
 
 **Dependencies:** Tasks 1–3
 
@@ -91,7 +91,7 @@
 **Estimated scope:** Small to medium
 
 ## Checkpoint: Stage 7 complete
-- [ ] All five checks pass
-- [ ] Stage 7 "Done when" from `PROJECT.md` met
+- [x] All five checks pass
+- [x] Stage 7 "Done when" from `PROJECT.md` met
 - [ ] Commit, push, open PR
 - [ ] Human review and merge before stage 8

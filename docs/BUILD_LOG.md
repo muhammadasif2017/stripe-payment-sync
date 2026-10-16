@@ -250,8 +250,23 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - `src/worker/mapping.ts`, `src/worker/stripe-event-handler.ts`: the order ID check moved to `findOrderId()`, shared by the handler and reconciliation.
   - Tests: `src/reconciliation/missing-payments.spec.ts` (10), `src/config/env.validation.spec.ts` (+5), `test/reconciliation.e2e-spec.ts` (5: a missing payment is queued and only that one, the window and status sent to Stripe, every page read, a second run queues again with a new ID, nothing queued when all is recorded), `test/reconciliation-schedule.e2e-spec.ts` (2, with a real worker: the scheduler is registered at 03:00 UTC; the dashboard's Run now route runs it and the job returns the summary). `test/admin.e2e-spec.ts` now expects both queues on the dashboard, on purpose. `test/worker.e2e-spec.ts` removes the scheduler its worker registers.
 
+- **Task 4: Delete-and-restore check, docs.** `README.md` (walkthrough step 6, failure table, setting, known limits), `CLAUDE.md` (how to start a run, job ID rule, scheduler cleanup in e2e) and these docs.
+
+### Problems and fixes
+
+- **Reconciliation found a real gap on its first run.** Besides the deleted row, it repaired the stage 3 test payment (`pi_3UQsF1…`, session `cs_test_a1cWrd…`). That payment was made before the webhook endpoint existed (stage 4), so its order had stayed `PENDING` with no payment row. It is now `PAID` with its payment. This is exactly the "webhook never arrived" case reconciliation exists for.
+- **A wrong number in a test, caught by the test.** The first version of the window test pinned an epoch value from the wrong year. It failed at once; the constant was recomputed from the date.
+
 ### Verified
 
 - Task 1: 17 handler and 9 worker e2e tests pass. Skipping the refunds in the repair fails 3 of the new tests.
 - Task 2: 14 worker e2e tests pass. Sending unknown jobs on to the event path fails all 3 malformed-job tests.
 - Task 3: 147 unit tests and 87 e2e tests pass. Computing the window in milliseconds fails a unit test and an e2e test; skipping the scheduler registration fails both schedule tests. After the suite, the test Redis holds no scheduler and the development Redis has no reconciliation keys.
+- Task 4, the "Done when" in the development database:
+  - Before: payment `pi_3UR5EgGImTS0y0Gh01L7xMXK`, 4900 `usd`, `SUCCEEDED`, row `1f3ec54a-…`; order `9b9d90ea-…` `PAID`. The row was saved, then deleted (`DELETE 1`, approved in decision 3).
+  - The app ran as API and worker. At startup it logged `Reconciliation scheduled: "0 3 * * *" (UTC)`; the dashboard showed the next run at 2026-10-17 03:00 UTC.
+  - **Run now** on the dashboard's Schedulers page (then **Confirm**): one `checkout.sessions.list job=reconciliation status=200` call, then `checked 5 completed sessions, 2 missing and queued, 2 already recorded, ... 1 without order ID`. The session without an order ID is the stage 4 `stripe trigger` one.
+  - Both repairs completed on attempt 1, each with a `checkout.sessions.retrieve` and a `refunds.list` call. After: payment `pi_3UR5EgGImTS0y0Gh01L7xMXK`, 4900 `usd`, `SUCCEEDED`, new row `4ba03437-…`; order still `PAID`. The second repair was the stage 3 payment (see Problems).
+  - A second run: `0 missing and queued, 4 already recorded`. The same "Run now" request sent with `Origin: https://evil.example` got 403.
+  - The development Redis keeps the `daily-reconciliation` scheduler, as intended: the next worker start finds it and updates it.
+- Task 4: 147 unit tests and 87 e2e tests pass; lint, type check and build are clean.
