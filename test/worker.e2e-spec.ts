@@ -133,6 +133,22 @@ describe('Stripe events worker (e2e)', () => {
     });
   });
 
+  it('logs a failure to load the event (database down) and retries', async () => {
+    const { orderId, eventId } = await paidOrderEvent();
+    vi.spyOn(prisma.stripeEvent, 'findUnique').mockRejectedValueOnce(
+      new Error('Connection refused'),
+    );
+
+    await enqueue(eventId);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('completed');
+    expect(Logger.prototype.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`Event ${eventId} failed on attempt 1, will retry`),
+    );
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status).toBe('PAID');
+  });
+
   it('gives up after 5 failed attempts and marks the event FAILED with the error', async () => {
     const { orderId, eventId } = await paidOrderEvent();
     vi.spyOn(prisma, '$transaction').mockRejectedValue(new Error('Connection refused'));

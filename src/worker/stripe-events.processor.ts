@@ -36,8 +36,14 @@ export class StripeEventsProcessor extends WorkerHost {
     const attempt = job.attemptsMade + 1;
     const maxAttempts = job.opts.attempts ?? 1;
 
-    // A database outage throws here and is retried like any other failure.
-    const event = await this.prisma.stripeEvent.findUnique({ where: { id: eventId } });
+    let event;
+    try {
+      event = await this.prisma.stripeEvent.findUnique({ where: { id: eventId } });
+    } catch (error) {
+      // Usually the database is down. Log it (saving it will fail too, which is also logged) and retry.
+      await this.recordFailure(eventId, attempt, error, attempt >= maxAttempts);
+      throw error;
+    }
     if (!event) {
       throw new UnrecoverableError(`Event ${eventId} is not in stripe_events`);
     }
