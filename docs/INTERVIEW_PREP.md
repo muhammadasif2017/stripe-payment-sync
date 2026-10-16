@@ -163,3 +163,11 @@ Processing needs Stripe API calls and several database writes, which can be slow
 
 **How do you test webhooks on your own machine?**
 Two ways. Automated tests sign their own payloads with `stripe.webhooks.generateTestHeaderString` and a test secret, so they need no network. For the real thing, the Stripe CLI's `stripe listen --forward-to localhost:3000/webhooks/stripe` opens a connection to Stripe and forwards test-mode events to the local app, signed with a secret it prints; `stripe trigger checkout.session.completed` creates a real test payment that fires the events.
+
+## Stage 5: Worker with retries
+
+**Why compute the order status instead of setting it per event?**
+Stripe doesn't promise delivery order, and retries can run minutes later. If each event set a status ("refunded", then "paid" arriving late), the last one to run would win, even when it's stale. Computing the status from all the order's payments and refunds gives the same answer whatever the order of events. It is also a pure function, so every case has a unit test.
+
+**Why does an expired order stay expired?**
+When a checkout session expires, Stripe can also cancel its payment intent. If the cancellation is processed after the expiry, a status built only from payments would see "nothing paid, nothing failed" and go back to `PENDING`. The expiry is an input to the calculation, and it only gives way when money was actually paid.

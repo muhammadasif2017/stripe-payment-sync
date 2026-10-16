@@ -141,3 +141,13 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 - Task 2: 30 e2e tests pass. Replacing `constructEvent` with `constructEventWithoutVerification` fails the 4 rejection tests; turning off `rawBody` fails the valid-signature test.
 - Task 3: 70 unit tests and 35 e2e tests pass. Removing the job ID fails the duplicate tests; skipping the enqueue for duplicates fails the "queue fails, redelivery completes it" test; storing every type fails the unhandled-type test.
 - Task 4, real Stripe: `STRIPE_WEBHOOK_SECRET` in `.env` came from `stripe listen --print-secret` (value never printed). With `stripe listen --all-snapshot --latest --forward-to localhost:3000/webhooks/stripe` running, `stripe trigger checkout.session.completed` sent 7 events, all answered 200; exactly 1 was stored (`checkout.session.completed` `evt_1UQsapGImTS0y0GhOVMBJsvY`, `PENDING`) with 1 waiting job of the same ID. `stripe events resend` of that event: 200, logged as duplicate, still 1 row and 1 job. A forged signature and a missing one: 400, nothing saved. A real checkout paid with card 4242 (session `cs_test_a1OrVJC7LSl07HtSJc4m5i9tt6OWiZanv5p7zrpROedR0oNK6wErk4A0dW`) arrived as `evt_1UQsdIGImTS0y0GhoxvmVO9Q`, stored and queued; its `metadata.order_id` matches the order, which stays `PENDING` until stage 5.
+
+## Stage 5: Worker with retries (2026-10-16)
+
+### What was built
+
+- **Task 1: Mapping functions** (`src/worker/mapping.ts`, no database or network). `toPaymentStatus` maps a payment intent to `SUCCEEDED`, `CANCELED`, `FAILED` (declined, back to `requires_payment_method` with an error) or nothing yet. `toRefundStatus` maps refund statuses; unknown ones count as pending. `deriveOrderStatus` computes the order status from succeeded payments and refunds, an expired checkout and declined cards, and refuses refunds above the amount paid with a `PermanentProcessingError`.
+
+### Verified
+
+- Task 1: 26 unit tests. Mapping every `requires_payment_method` to `FAILED`, or checking "declined" before "expired", each fails a test.

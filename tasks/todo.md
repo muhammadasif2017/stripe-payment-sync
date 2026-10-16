@@ -5,13 +5,13 @@
 **Description:** Pure functions, no database or network: Stripe payment intent status to payment status, Stripe refund status to refund status, and the order status from an order's payments and refunds.
 
 **Acceptance criteria:**
-- [ ] `toPaymentStatus(paymentIntent)`: `succeeded` → `SUCCEEDED`, `canceled` → `CANCELED`, a failed attempt → `FAILED`, still in progress → no row
-- [ ] `toRefundStatus(refund)`: `pending`/`requires_action` → `PENDING`, `succeeded`, `failed`, `canceled`
-- [ ] `deriveOrderStatus(...)`: `PAID`, `PARTIALLY_REFUNDED`, `REFUNDED` from paid vs refunded amounts; `EXPIRED` (sticky once the checkout expired) and `PAYMENT_FAILED` only when nothing was paid; otherwise `PENDING`
-- [ ] Refunds above the paid amount throw
+- [x] `toPaymentStatus(paymentIntent)`: `succeeded` → `SUCCEEDED`, `canceled` → `CANCELED`, a failed attempt → `FAILED`, still in progress → no row
+- [x] `toRefundStatus(refund)`: `pending`/`requires_action` → `PENDING`, `succeeded`, `failed`, `canceled`
+- [x] `deriveOrderStatus(...)`: `PAID`, `PARTIALLY_REFUNDED`, `REFUNDED` from paid vs refunded amounts; `EXPIRED` (sticky once the checkout expired) and `PAYMENT_FAILED` only when nothing was paid; otherwise `PENDING`
+- [x] Refunds above the paid amount throw
 
 **Verification:**
-- [ ] Unit tests for every branch; prove one can fail
+- [x] Unit tests for every branch; prove one can fail
 
 **Dependencies:** None
 
