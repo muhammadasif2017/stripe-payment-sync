@@ -67,7 +67,7 @@ A ready-made web dashboard for BullMQ queues, as the brief asks: it lists waitin
 
 ## HTTP Basic auth (Node's `crypto`, no library)
 
-The dashboard login. The browser shows its own login box when the server answers 401 with `WWW-Authenticate: Basic`, then sends `user:password` in base64 with every request. No sessions, cookies or login page to build. It is about 30 lines, so no library: the user name and password are each hashed with SHA-256 and compared with `crypto.timingSafeEqual`, which takes the same time whether the first or the last character is wrong. Limits: no logout (close the browser), and base64 is not encryption, so outside localhost it must run over HTTPS.
+The dashboard login. The browser shows its own login box when the server answers 401 with `WWW-Authenticate: Basic`, then sends `user:password` in base64 with every request. No sessions, cookies or login page to build. It is about 30 lines, so no library: the user name and password are each hashed with SHA-256 and compared with `crypto.timingSafeEqual`, which takes the same time whether the first or the last character is wrong. Limits: no logout (close the browser), and base64 is not encryption, so outside localhost it must run over HTTPS. Because the browser re-sends the credentials to any request for the dashboard, a second middleware refuses changes that the browser's `Sec-Fetch-Site` or `Origin` header marks as coming from another site.
 
 ## Claude Code hooks
 

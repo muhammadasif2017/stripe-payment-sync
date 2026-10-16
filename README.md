@@ -264,7 +264,7 @@ A manual retry is one extra attempt (attempt 6), not five more. Retrying a job t
 | `POST` | `/checkout` | `{ "courseId": "nestjs-fundamentals", "email"?: "..." }` | `201 { orderId, checkoutUrl }`; `400` for an unknown course or any extra field; `502` (generic message) when Stripe fails |
 | `POST` | `/webhooks/stripe` | Stripe event, `Stripe-Signature` header | `200 {"received":true}`; `400` for a bad signature or live mode; `500` so Stripe retries |
 | `GET` | `/`, `/success.html`, `/cancel.html` | | Minimal checkout pages |
-| `GET` | `/admin/queues` | | Bull Board queue dashboard; HTTP Basic auth on every path below it, `401` without it |
+| `GET` | `/admin/queues` | | Bull Board queue dashboard; HTTP Basic auth on every path below it (`401` without it); changes sent from another site get `403` |
 
 ```bash
 curl -X POST http://localhost:3000/checkout \
@@ -361,8 +361,8 @@ All settings come from environment variables (`.env` locally), validated at star
 ## Testing
 
 ```bash
-npm test            # 121 unit tests
-npm run test:e2e    # 69 end-to-end tests (needs `docker compose up -d`)
+npm test            # 132 unit tests
+npm run test:e2e    # 71 end-to-end tests (needs `docker compose up -d`)
 npm run lint
 npm run typecheck
 npm run build

@@ -105,6 +105,36 @@ describe('Queue dashboard (e2e)', () => {
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
+  it('refuses a form POST from another site, even with the cached login: no job is added', async () => {
+    const before = await queue.count();
+
+    // What a browser sends when a page on another site submits a form to the dashboard. A form
+    // needs no CORS preflight, and the browser attaches the Basic credentials it remembers.
+    await request(app.getHttpServer())
+      .post(`/admin/queues/api/queues/${STRIPE_EVENTS_QUEUE}/add`)
+      .auth(USER, PASSWORD)
+      .set('Origin', 'https://evil.example')
+      .set('Sec-Fetch-Site', 'cross-site')
+      .set('Content-Type', 'text/plain')
+      .send('{"name":"stripe-event","data":{"eventId":"evt_forged"}}')
+      .expect(403);
+
+    expect(await queue.count()).toBe(before);
+  });
+
+  it('lets the dashboard page itself send actions (same origin)', async () => {
+    await request(app.getHttpServer())
+      .put(`/admin/queues/api/queues/${STRIPE_EVENTS_QUEUE}/pause`)
+      .auth(USER, PASSWORD)
+      .set('Sec-Fetch-Site', 'same-origin')
+      .expect(200);
+    await request(app.getHttpServer())
+      .put(`/admin/queues/api/queues/${STRIPE_EVENTS_QUEUE}/resume`)
+      .auth(USER, PASSWORD)
+      .set('Sec-Fetch-Site', 'same-origin')
+      .expect(200);
+  });
+
   it('leaves the rest of the app public', async () => {
     await get('/health').expect(200);
   });

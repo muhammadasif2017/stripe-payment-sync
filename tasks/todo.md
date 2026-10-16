@@ -84,7 +84,7 @@
 - [x] The failed job shows on `/admin/queues` after logging in; wrong credentials are refused
 - [x] Retry from the dashboard completes it: event `PROCESSED`, payment `SUCCEEDED`, order `PAID`
 - [x] `README.md`, `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md` (why a wrapper, why Basic auth, what a manual retry means, why retrying a completed job is harmless)
-- [ ] PR from `stage-6-logging-dashboard` to `main`
+- [x] PR from `stage-6-logging-dashboard` to `main`
 
 **Verification:**
 - [x] Manual check with Docker, the Stripe CLI, the browser and database queries
@@ -98,5 +98,5 @@
 ## Checkpoint: Stage 6 complete
 - [x] All five checks pass
 - [x] Stage 6 "Done when" from `PROJECT.md` met
-- [ ] Commit, push, open PR
+- [x] Commit, push, open PR
 - [ ] Human review and merge before stage 7

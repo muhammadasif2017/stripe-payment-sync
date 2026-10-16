@@ -81,6 +81,10 @@ describe('validateEnv', () => {
     expect(run).not.toThrow('short-secret');
   });
 
+  it('rejects an empty ADMIN_PASSWORD, as left in .env.example', () => {
+    expect(() => validateEnv({ ...validEnv, ADMIN_PASSWORD: '' })).toThrow('ADMIN_PASSWORD');
+  });
+
   it('rejects an ADMIN_USERNAME with a colon', () => {
     expect(() => validateEnv({ ...validEnv, ADMIN_USERNAME: 'ad:min' })).toThrow('ADMIN_USERNAME');
   });
