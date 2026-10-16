@@ -1,6 +1,8 @@
+import { Logger } from '@nestjs/common';
 import type Stripe from 'stripe';
 import type { Prisma } from './../src/generated/prisma/client.js';
 import type { PrismaService } from './../src/prisma/prisma.service.js';
+import { StripeCalls } from './../src/stripe/stripe-calls.js';
 import { PermanentProcessingError } from './../src/worker/mapping.js';
 import { StripeEventHandler } from './../src/worker/stripe-event-handler.js';
 import { createTestPrisma } from './test-prisma.js';
@@ -18,7 +20,10 @@ describe('StripeEventHandler (e2e)', () => {
     paymentIntents: Record<string, Partial<Stripe.PaymentIntent>>;
     refunds: Record<string, Partial<Stripe.Refund>[]>;
     error?: Error;
-  } = { sessions: {}, paymentIntents: {}, refunds: {} };
+    /** Overrides the page size the handler asks for, to spread a few refunds over several pages. */
+    refundPageSize?: number;
+    refundPages: number;
+  } = { sessions: {}, paymentIntents: {}, refunds: {}, refundPages: 0 };
 
   const fail = () => {
     if (stripeState.error) throw stripeState.error;
@@ -44,17 +49,26 @@ describe('StripeEventHandler (e2e)', () => {
       },
     },
     refunds: {
-      list: ({ payment_intent }: { payment_intent: string }) => ({
-        autoPagingToArray: () => {
-          fail();
-          return Promise.resolve(stripeState.refunds[payment_intent] ?? []);
-        },
-      }),
+      // One page of refunds, the way Stripe paginates: `limit` items after `starting_after`.
+      list: (params: { payment_intent: string; limit: number; starting_after?: string }) => {
+        fail();
+        stripeState.refundPages += 1;
+        const all = stripeState.refunds[params.payment_intent] ?? [];
+        const start = params.starting_after
+          ? all.findIndex((r) => r.id === params.starting_after) + 1
+          : 0;
+        const limit = stripeState.refundPageSize ?? params.limit;
+        return Promise.resolve({
+          data: all.slice(start, start + limit),
+          has_more: start + limit < all.length,
+        });
+      },
     },
   };
   const handler = new StripeEventHandler(
     prisma as unknown as PrismaService,
     fakeStripe as unknown as Stripe,
+    new StripeCalls(),
   );
 
   let n = 0;
@@ -121,6 +135,15 @@ describe('StripeEventHandler (e2e)', () => {
 
   beforeEach(() => {
     stripeState.error = undefined;
+    stripeState.refundPageSize = undefined;
+    stripeState.refundPages = 0;
+    // Every Stripe call is logged; keep the test output readable.
+    vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   afterAll(async () => {
@@ -264,6 +287,36 @@ describe('StripeEventHandler (e2e)', () => {
     const saved = await orderWithRows(order.id);
     expect(saved.status).toBe('REFUNDED');
     expect(saved.payments[0].refunds).toHaveLength(2);
+  });
+
+  it('refund.updated: reads every page of refunds, logging each page as one call', async () => {
+    const order = await newOrder();
+    const pi = paymentIntent(order.id);
+    const refunds = [1000, 1500, 2400].map((amount) => ({
+      id: uid('re_test'),
+      amount,
+      currency: 'usd',
+      status: 'succeeded' as const,
+      payment_intent: pi.id,
+    }));
+    stripeState.refunds[pi.id!] = refunds;
+    stripeState.refundPageSize = 2;
+    const log = vi.mocked(Logger.prototype.log);
+
+    const event = await storedEvent('refund.updated', { id: refunds[2].id, payment_intent: pi.id });
+    await handler.handle(event, 1);
+
+    const saved = await orderWithRows(order.id);
+    expect(saved.status).toBe('REFUNDED');
+    expect(saved.payments[0].refunds).toHaveLength(3);
+    expect(stripeState.refundPages).toBe(2);
+    const lines = log.mock.calls.map(([line]) => String(line));
+    expect(lines.filter((line) => line.startsWith(`refunds.list event=${event.id} `))).toHaveLength(
+      2,
+    );
+    expect(
+      lines.some((line) => line.startsWith(`paymentIntents.retrieve event=${event.id} `)),
+    ).toBe(true);
   });
 
   it('fails permanently when the order in the metadata does not exist, and saves nothing', async () => {

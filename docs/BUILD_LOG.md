@@ -186,11 +186,18 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - `src/stripe/stripe-calls.ts` (new): the brief asks for every Stripe call to be logged with the event ID, endpoint, status and duration. `StripeCalls.run(endpoint, context, call)` times one call and logs one line, such as `paymentIntents.retrieve event=evt_1 status=200 duration=213ms request=req_ok`. Failures are logged as warnings with the error type (`status=401 (StripeAuthenticationError)`), or `status=no response` when Stripe never answered, and the same error object is thrown again so the worker's retryable-vs-permanent check still works. Parameters, bodies and error messages are never logged, because a Checkout Session carries the customer's email.
   - `src/stripe/stripe.module.ts`: provides and exports `StripeCalls` next to the client.
   - `src/stripe/stripe-calls.spec.ts` (new): 8 unit tests, one per case.
+- **Task 2: Every Stripe call goes through the wrapper.** Each change and why:
+  - `src/checkout/checkout.service.ts`: `checkout.sessions.create` runs through `StripeCalls` with `order=<id>`, because no Stripe event exists yet at checkout.
+  - `src/worker/stripe-event-handler.ts`: `checkout.sessions.retrieve`, `paymentIntents.retrieve` and `refunds.list` run through `StripeCalls` with `event=<id>`. Refunds are now fetched page by page (`has_more` and `starting_after`, 100 per page) instead of with `autoPagingToArray`, so each page is one logged call. A safety limit of 100 pages stops a runaway loop.
+  - `src/checkout/checkout.service.spec.ts`, `test/stripe-event-handler.e2e-spec.ts`: pass a `StripeCalls` to the service and the handler. The fake Stripe client now returns refunds one page at a time like the real API. No existing expectation changed.
+  - `test/stripe-event-handler.e2e-spec.ts`: new test with 3 refunds on pages of 2; all 3 are recorded and 2 `refunds.list` log lines name the event.
 
 ### Problems and fixes
 
+- **Prettier and the 80-column default, again.** Running Prettier on a changed file rewrapped unrelated lines at 80 columns. Reverted, then formatted with `--print-width 100`, which matches the existing code.
 - **Stripe's own `response` event was not enough.** The library emits `request` and `response` events, which would log every call with no changes where Stripe is called. Reading the installed `RequestSender.js` showed that a connection error or timeout never emits `response`, and the event can't know which Stripe event a call belongs to. A wrapper sees every outcome and gets the event ID passed in plainly.
 
 ### Verified
 
 - Task 1: 8 new unit tests pass. Swallowing the error instead of rethrowing it fails 3 of them.
+- Task 2: 106 unit tests and 54 e2e tests pass. Stopping after the first page of refunds fails the new pagination test.

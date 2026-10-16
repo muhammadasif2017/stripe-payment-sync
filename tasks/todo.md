@@ -5,16 +5,16 @@
 **Description:** A `StripeCalls` service whose `run(endpoint, context, call)` times one Stripe call, logs one line and returns or rethrows unchanged.
 
 **Acceptance criteria:**
-- [ ] Success: one `log` line with endpoint, event or order ID, status and request ID from `lastResponse`, duration in ms
-- [ ] Failure with a response (e.g. 401, 404, 429): one `warn` line with status, error type and request ID; the same error object is rethrown
-- [ ] Failure with no response (`StripeConnectionError`, timeout): `status=no response` with the error type and duration
-- [ ] A result without `lastResponse` (test fakes) logs `status=ok` instead of failing
-- [ ] Never logs parameters or bodies
+- [x] Success: one `log` line with endpoint, event or order ID, status and request ID from `lastResponse`, duration in ms
+- [x] Failure with a response (e.g. 401, 404, 429): one `warn` line with status, error type and request ID; the same error object is rethrown
+- [x] Failure with no response (`StripeConnectionError`, timeout): `status=no response` with the error type and duration
+- [x] A result without `lastResponse` (test fakes) logs `status=ok` instead of failing
+- [x] Never logs parameters or bodies
 
 **Verification:**
-- [ ] Unit tests for each case above, with a fake call and a spied logger
-- [ ] Unit test: a call whose parameters include an email produces log output without it
-- [ ] Prove a test can fail (e.g. swallow the error instead of rethrowing)
+- [x] Unit tests for each case above, with a fake call and a spied logger
+- [x] Unit test: a call whose parameters include an email produces log output without it
+- [x] Prove a test can fail (e.g. swallow the error instead of rethrowing)
 
 **Dependencies:** None
 
@@ -27,15 +27,15 @@
 **Description:** The checkout service and the event handler call Stripe through `StripeCalls.run`; refunds are listed page by page.
 
 **Acceptance criteria:**
-- [ ] `checkout.sessions.create` logged with `order=<id>`
-- [ ] `checkout.sessions.retrieve`, `paymentIntents.retrieve`, `refunds.list` (each page) logged with `event=<id>`
-- [ ] Refund listing follows `has_more` / `starting_after` with a page limit, and still returns every refund
-- [ ] Error classification (invalid request is permanent, the rest retryable) unchanged
+- [x] `checkout.sessions.create` logged with `order=<id>`
+- [x] `checkout.sessions.retrieve`, `paymentIntents.retrieve`, `refunds.list` (each page) logged with `event=<id>`
+- [x] Refund listing follows `has_more` / `starting_after` with a page limit, and still returns every refund
+- [x] Error classification (invalid request is permanent, the rest retryable) unchanged
 
 **Verification:**
-- [ ] Existing unit and e2e tests pass without changing their expectations
-- [ ] New e2e test: refunds spread over 2 pages are all recorded
-- [ ] Prove a test can fail (e.g. stop after the first page)
+- [x] Existing unit and e2e tests pass without changing their expectations
+- [x] New e2e test: refunds spread over 2 pages are all recorded
+- [x] Prove a test can fail (e.g. stop after the first page)
 
 **Dependencies:** Task 1
 
@@ -44,7 +44,7 @@
 **Estimated scope:** Small to medium
 
 ## Checkpoint: Logging
-- [ ] Tasks 1–2 verified, all five checks pass, commit
+- [x] Tasks 1–2 verified, all five checks pass, commit
 
 ## Task 3: Bull Board behind Basic auth
 

@@ -1,4 +1,4 @@
-﻿# Stage 5 â€“ Worker with Retries: Tasks
+# Stage 5 â€“ Worker with Retries: Tasks
 
 ## Task 1: Mapping functions
 

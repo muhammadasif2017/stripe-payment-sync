@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Stripe from 'stripe';
 import type { Env } from '../config/env.validation.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { StripeCalls } from '../stripe/stripe-calls.js';
 import { STRIPE_CLIENT } from '../stripe/stripe.module.js';
 import { findCourse } from './catalog.js';
 import { CreateCheckoutDto } from './dto/create-checkout.dto.js';
@@ -22,6 +23,7 @@ export class CheckoutService {
     private readonly prisma: PrismaService,
     @Inject(STRIPE_CLIENT) private readonly stripe: Stripe,
     private readonly config: ConfigService<Env, true>,
+    private readonly stripeCalls: StripeCalls,
   ) {}
 
   /**
@@ -66,35 +68,37 @@ export class CheckoutService {
     const appUrl = this.config.get('APP_URL', { infer: true });
     let session: Stripe.Checkout.Session;
     try {
-      session = await this.stripe.checkout.sessions.create(
-        {
-          mode: 'payment',
-          // Card only: the data model has no state for bank debits that take days to settle.
-          allowed_payment_method_types: ['card'],
-          // One currency only: without this, Checkout offers local currencies (e.g. PKR) and the
-          // payment no longer matches the order's amount and currency.
-          adaptive_pricing: { enabled: false },
-          line_items: [
-            {
-              quantity: 1,
-              price_data: {
-                currency: course.currency,
-                unit_amount: course.amount,
-                product_data: { name: course.name },
+      session = await this.stripeCalls.run('checkout.sessions.create', { orderId }, () =>
+        this.stripe.checkout.sessions.create(
+          {
+            mode: 'payment',
+            // Card only: the data model has no state for bank debits that take days to settle.
+            allowed_payment_method_types: ['card'],
+            // One currency only: without this, Checkout offers local currencies (e.g. PKR) and the
+            // payment no longer matches the order's amount and currency.
+            adaptive_pricing: { enabled: false },
+            line_items: [
+              {
+                quantity: 1,
+                price_data: {
+                  currency: course.currency,
+                  unit_amount: course.amount,
+                  product_data: { name: course.name },
+                },
               },
-            },
-          ],
-          client_reference_id: orderId,
-          customer_email: email,
-          // Stripe doesn't copy session metadata to the PaymentIntent, and payment_intent.* events
-          // (stage 5) carry only the PaymentIntent, so the order ID goes on both.
-          metadata: { order_id: orderId },
-          payment_intent_data: { metadata: { order_id: orderId } },
-          success_url: `${appUrl}/success.html?session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${appUrl}/cancel.html`,
-        },
-        // One session per order, however many times this request is retried.
-        { idempotencyKey: orderId },
+            ],
+            client_reference_id: orderId,
+            customer_email: email,
+            // Stripe doesn't copy session metadata to the PaymentIntent, and payment_intent.* events
+            // (stage 5) carry only the PaymentIntent, so the order ID goes on both.
+            metadata: { order_id: orderId },
+            payment_intent_data: { metadata: { order_id: orderId } },
+            success_url: `${appUrl}/success.html?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${appUrl}/cancel.html`,
+          },
+          // One session per order, however many times this request is retried.
+          { idempotencyKey: orderId },
+        ),
       );
     } catch (error) {
       this.logFailure(orderId, error);
