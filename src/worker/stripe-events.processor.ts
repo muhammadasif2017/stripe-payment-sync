@@ -2,7 +2,13 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job, UnrecoverableError } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { STRIPE_EVENTS_QUEUE, type StripeEventJob } from '../queue/queue.module.js';
+import {
+  RECONCILE_SESSION_JOB,
+  STRIPE_EVENT_JOB,
+  STRIPE_EVENTS_QUEUE,
+  type ReconcileSessionJob,
+  type StripeEventJob,
+} from '../queue/queue.module.js';
 import { PermanentProcessingError } from './mapping.js';
 import { StripeEventHandler } from './stripe-event-handler.js';
 
@@ -10,9 +16,12 @@ import { StripeEventHandler } from './stripe-event-handler.js';
 const MAX_ERROR_LENGTH = 1000;
 
 /**
- * Consumes the `stripe-events` queue: one job per Stripe event, up to 5 at a time.
- * Retries come from the queue's job options (5 attempts, exponential backoff); this class records
- * every attempt on the event row and tells BullMQ which failures are worth retrying.
+ * Consumes the `stripe-events` queue, up to 5 jobs at a time. Two kinds of job:
+ * - `stripe-event`: one stored Stripe event; every attempt is recorded on its `stripe_events` row.
+ * - `reconcile-session`: one Checkout Session repair queued by reconciliation; it has no event row,
+ *   so its attempts and errors live in the job (visible on the dashboard) and the log.
+ * Retries come from the queue's job options (5 attempts, exponential backoff); this class tells
+ * BullMQ which failures are worth retrying.
  */
 @Processor(STRIPE_EVENTS_QUEUE, { concurrency: 5 })
 export class StripeEventsProcessor extends WorkerHost {
@@ -28,14 +37,26 @@ export class StripeEventsProcessor extends WorkerHost {
   /**
    * Processes one job. Throwing makes BullMQ retry it, except for `UnrecoverableError`, which fails
    * the job at once.
-   * @param job The job; its data names the stored event.
+   * @param job The job; its name says what kind it is, its data names the event or session.
    */
-  async process(job: Job<StripeEventJob>): Promise<void> {
-    const { eventId } = job.data;
+  async process(job: Job<Partial<StripeEventJob & ReconcileSessionJob>>): Promise<void> {
     // attemptsMade counts the attempts that already failed, so this one is attemptsMade + 1.
     const attempt = job.attemptsMade + 1;
     const maxAttempts = job.opts.attempts ?? 1;
 
+    // Jobs can also be added by hand on the dashboard, so check the name and data before trusting them.
+    const { eventId, sessionId } = job.data ?? {};
+    if (job.name === STRIPE_EVENT_JOB && typeof eventId === 'string' && eventId) {
+      return this.processEvent(eventId, attempt, maxAttempts);
+    }
+    if (job.name === RECONCILE_SESSION_JOB && typeof sessionId === 'string' && sessionId) {
+      return this.processRepair(sessionId, attempt, maxAttempts);
+    }
+    throw new UnrecoverableError(`Job ${job.id} has an unknown name or data: ${job.name}`);
+  }
+
+  /** Applies one stored Stripe event, recording each attempt on its `stripe_events` row. */
+  private async processEvent(eventId: string, attempt: number, maxAttempts: number): Promise<void> {
     let event;
     try {
       event = await this.prisma.stripeEvent.findUnique({ where: { id: eventId } });
@@ -59,6 +80,29 @@ export class StripeEventsProcessor extends WorkerHost {
       const permanent = error instanceof PermanentProcessingError;
       const final = permanent || attempt >= maxAttempts;
       await this.recordFailure(eventId, attempt, error, final);
+      if (permanent) {
+        throw new UnrecoverableError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /** Repairs one Checkout Session. Failures are logged; there is no event row to save them on. */
+  private async processRepair(
+    sessionId: string,
+    attempt: number,
+    maxAttempts: number,
+  ): Promise<void> {
+    try {
+      await this.handler.reconcileSession(sessionId);
+      this.logger.log(`Repaired Checkout Session ${sessionId} (attempt ${attempt})`);
+    } catch (error) {
+      const permanent = error instanceof PermanentProcessingError;
+      const final = permanent || attempt >= maxAttempts;
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      this.logger.warn(
+        `Repair of Checkout Session ${sessionId} failed on attempt ${attempt}${final ? ' (giving up)' : ', will retry'}: ${message}`,
+      );
       if (permanent) {
         throw new UnrecoverableError(error.message);
       }

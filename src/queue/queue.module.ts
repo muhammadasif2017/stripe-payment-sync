@@ -7,9 +7,20 @@ import type { Env } from '../config/env.validation.js';
 /** Queue of Stripe events waiting for the worker. Each job's ID is the Stripe event ID. */
 export const STRIPE_EVENTS_QUEUE = 'stripe-events';
 
-/** Data of a job in {@link STRIPE_EVENTS_QUEUE}. The event itself is in `stripe_events`, not in Redis. */
+/** Name of a job that processes one stored Stripe event. */
+export const STRIPE_EVENT_JOB = 'stripe-event';
+
+/** Name of a job that repairs one paid Checkout Session found by reconciliation (stage 7). */
+export const RECONCILE_SESSION_JOB = 'reconcile-session';
+
+/** Data of a {@link STRIPE_EVENT_JOB} job. The event itself is in `stripe_events`, not in Redis. */
 export interface StripeEventJob {
   eventId: string;
+}
+
+/** Data of a {@link RECONCILE_SESSION_JOB} job. */
+export interface ReconcileSessionJob {
+  sessionId: string;
 }
 
 /**

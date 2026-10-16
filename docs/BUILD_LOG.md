@@ -233,7 +233,13 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 - **Task 1: Repair one Checkout Session.** Each change and why:
   - `src/worker/stripe-event-handler.ts`: the brief asks for a job that finds payments missing from the database and queues them. Re-queuing the original Stripe event can't do that: its job ID is still in Redis for 7 days (so a new add is ignored), the processor skips events already `PROCESSED`, and the event may never have arrived. So the handler gains `reconcileSession(sessionId)`, which fetches the session with its payment intent and every page of that payment intent's refunds, then writes them through the same transaction as events. The transaction moved into a private `apply()`; only events mark a `stripe_events` row `PROCESSED`, since a repair has no row. Repair calls are logged with `job=reconciliation`. The "no valid order_id" message now names what was processed (`Event evt_...` or `Session cs_...`); the event wording is unchanged.
   - `test/stripe-event-handler.e2e-spec.ts`: 4 tests: a deleted payment and its refund come back and the order is recomputed; running twice changes nothing; the calls are logged as `job=reconciliation` and no event row is written; a session without `order_id` fails permanently.
+- **Task 2: `reconcile-session` jobs in the worker.** Each change and why:
+  - `src/queue/queue.module.ts`: job name constants `stripe-event` and `reconcile-session`, and the `ReconcileSessionJob` data type. Repairs use the existing `stripe-events` queue, so they get the same 5 attempts with backoff, the same worker and the same dashboard.
+  - `src/worker/stripe-events.processor.ts`: dispatches on the job name. A job with an unknown name, or without its `eventId` / `sessionId`, fails at once with `UnrecoverableError`: Bull Board's "add job" can create any job, and retrying a malformed one 5 times helps nobody. Repair failures are logged and retried like events, but never written to `stripe_events`, because a repair has no row there (an update would fail with "record not found").
+  - `src/webhooks/webhooks.service.ts`: uses the `STRIPE_EVENT_JOB` constant instead of the string.
+  - `test/worker.e2e-spec.ts`: the fake Stripe client gains sessions and refunds. 5 tests: a repair writes the missing payment and leaves the stored event untouched; a repair that fails once is retried and completes; an unknown name, a `stripe-event` without `eventId` and a `reconcile-session` without `sessionId` each fail after 1 attempt.
 
 ### Verified
 
 - Task 1: 17 handler and 9 worker e2e tests pass. Skipping the refunds in the repair fails 3 of the new tests.
+- Task 2: 14 worker e2e tests pass. Sending unknown jobs on to the event path fails all 3 malformed-job tests.

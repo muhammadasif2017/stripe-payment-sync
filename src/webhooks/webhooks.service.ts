@@ -6,7 +6,7 @@ import Stripe from 'stripe';
 import type { Env } from '../config/env.validation.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { STRIPE_EVENTS_QUEUE, type StripeEventJob } from '../queue/queue.module.js';
+import { STRIPE_EVENT_JOB, STRIPE_EVENTS_QUEUE, type StripeEventJob } from '../queue/queue.module.js';
 import { STRIPE_CLIENT } from '../stripe/stripe.module.js';
 import { isHandledEventType } from './handled-events.js';
 
@@ -98,7 +98,7 @@ export class WebhooksService {
 
     // Also for duplicates: a delivery that stored the event but failed to queue it is completed here.
     // BullMQ ignores the add if a job with this ID already exists.
-    await this.queue.add('stripe-event', { eventId: event.id }, { jobId: event.id });
+    await this.queue.add(STRIPE_EVENT_JOB, { eventId: event.id }, { jobId: event.id });
 
     this.logger.log(`${result === 'stored' ? 'Stored' : 'Duplicate'} ${event.type} event ${event.id}`);
     return result;

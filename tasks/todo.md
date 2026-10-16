@@ -25,13 +25,13 @@
 **Description:** The `stripe-events` processor runs two job names: `stripe-event` (as before) and `reconcile-session`.
 
 **Acceptance criteria:**
-- [ ] Dispatch on `job.name`; an unknown name or missing `eventId` / `sessionId` is an `UnrecoverableError`
-- [ ] `reconcile-session` failures are logged and retried like events, but never written to `stripe_events`
-- [ ] Permanent errors fail at once, as for events
+- [x] Dispatch on `job.name`; an unknown name or missing `eventId` / `sessionId` is an `UnrecoverableError`
+- [x] `reconcile-session` failures are logged and retried like events, but never written to `stripe_events`
+- [x] Permanent errors fail at once, as for events
 
 **Verification:**
-- [ ] Worker e2e: a `reconcile-session` job restores a deleted payment; one that fails once is retried and completes; an unknown job name fails without retries
-- [ ] Prove a test can fail
+- [x] Worker e2e: a `reconcile-session` job restores a deleted payment; one that fails once is retried and completes; an unknown job name fails without retries
+- [x] Prove a test can fail
 
 **Dependencies:** Task 1
 
@@ -40,7 +40,7 @@
 **Estimated scope:** Small to medium
 
 ## Checkpoint: Repair path
-- [ ] Tasks 1–2 verified, all five checks pass, commit
+- [x] Tasks 1–2 verified, all five checks pass, commit
 
 ## Task 3: The reconciliation run and its schedule
 
