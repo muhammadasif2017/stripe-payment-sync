@@ -199,6 +199,7 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - `src/config/env.validation.ts`, `.env.example`, `vitest.config.e2e.ts`: `ADMIN_USERNAME` (default `admin`, no colon) and `ADMIN_PASSWORD` (required, 16+ characters, value never printed). The e2e suite uses a fixed test password.
   - `test/admin.e2e-spec.ts` (new): the page loads with the right login (proves the board is mounted), the queue is listed, 5 paths ask for a login without one, a wrong password is refused for pages and actions, a failed job is retried through the dashboard API, and cross-origin requests are not approved.
   - `test/worker.e2e-spec.ts`: 3 tests for what the retry button does with a real worker (below).
+- **Task 4: Forced failure, dashboard retry, docs.** `README.md` (dashboard walkthrough, settings, known limits), `CLAUDE.md` (dashboard URL, `StripeCalls` rule, Stripe CLI path, Prettier width), and these docs.
 
 ### Problems and fixes
 
@@ -212,3 +213,10 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 - Task 1: 8 new unit tests pass. Swallowing the error instead of rethrowing it fails 3 of them.
 - Task 2: 106 unit tests and 54 e2e tests pass. Stopping after the first page of refunds fails the new pagination test.
 - Task 3: 121 unit tests and 69 e2e tests pass. Removing the login middleware fails 6 dashboard tests. The test that loads the page with the right login matters as much as the 401 tests: a board that silently wasn't mounted would answer 404, and "not 200" alone would look like a working login.
+- Task 4, the "Done when" with real Stripe:
+  - The API ran with `WORKER_ENABLED=false` and `stripe listen`. A checkout paid with card 4242 logged `checkout.sessions.create order=9b9d90ea-… status=200 duration=875ms request=req_BHn5…` and stored `evt_1UR5EiGImTS0y0GhR9DZONIG` with its job waiting.
+  - A worker started on port 3001 with `STRIPE_SECRET_KEY=sk_test_wrong`. Each of the 5 attempts logged `checkout.sessions.retrieve event=evt_1UR5Ei… status=401 (StripeAuthenticationError)`, 10, 20, 40 and 80 seconds apart. The event ended `FAILED` with `attempts = 5` and "Invalid API Key provided: sk_test_*rong".
+  - `/admin/queues` answered 401 with no login and with a wrong password (logged as a rejected login), and 200 with the password from `.env`. In the browser the job was in the **Failed** list with its error and "attempt #5".
+  - The worker restarted with the real key. Clicking **Retry** (then **Confirm**) ran attempt 6: `checkout.sessions.retrieve … status=200 duration=812ms request=req_hUQZ…`. The event is `PROCESSED` with `attempts = 6`, the payment `SUCCEEDED` (4900 cents), the order `PAID`.
+  - The 401 log lines have no Stripe request ID: Stripe's authentication errors don't carry one. The line still shows status, error type and duration.
+- Task 4: 121 unit tests and 69 e2e tests pass; lint, type check and build are clean.

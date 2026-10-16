@@ -80,14 +80,14 @@
 **Description:** Run the "Done when" for real (method chosen in decision 2), document, open the PR.
 
 **Acceptance criteria:**
-- [ ] A real event fails all 5 attempts; each failed Stripe call is logged with its event ID, status and duration
-- [ ] The failed job shows on `/admin/queues` after logging in; wrong credentials are refused
-- [ ] Retry from the dashboard completes it: event `PROCESSED`, payment `SUCCEEDED`, order `PAID`
-- [ ] `README.md`, `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md` (why a wrapper, why Basic auth, what a manual retry means, why retrying a completed job is harmless)
+- [x] A real event fails all 5 attempts; each failed Stripe call is logged with its event ID, status and duration
+- [x] The failed job shows on `/admin/queues` after logging in; wrong credentials are refused
+- [x] Retry from the dashboard completes it: event `PROCESSED`, payment `SUCCEEDED`, order `PAID`
+- [x] `README.md`, `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md` (why a wrapper, why Basic auth, what a manual retry means, why retrying a completed job is harmless)
 - [ ] PR from `stage-6-logging-dashboard` to `main`
 
 **Verification:**
-- [ ] Manual check with Docker, the Stripe CLI, the browser and database queries
+- [x] Manual check with Docker, the Stripe CLI, the browser and database queries
 
 **Dependencies:** Tasks 1–3
 
@@ -96,7 +96,7 @@
 **Estimated scope:** Small to medium
 
 ## Checkpoint: Stage 6 complete
-- [ ] All five checks pass
-- [ ] Stage 6 "Done when" from `PROJECT.md` met
+- [x] All five checks pass
+- [x] Stage 6 "Done when" from `PROJECT.md` met
 - [ ] Commit, push, open PR
 - [ ] Human review and merge before stage 7

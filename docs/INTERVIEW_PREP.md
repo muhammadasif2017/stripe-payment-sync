@@ -221,3 +221,6 @@ It calls BullMQ's `job.retry()`, which moves the failed job back to the waiting 
 
 **What do you keep out of the logs?**
 Request and response bodies, and error messages. A Checkout Session contains the customer's email, and logs are often copied to other systems with wider access than the database. A unit test checks that an email in the call never appears in the output.
+
+**Show me the dashboard working.**
+A worker was started with a wrong Stripe key. Each attempt logged one line, such as `checkout.sessions.retrieve event=evt_… status=401 (StripeAuthenticationError) duration=116ms`, and after 5 attempts the event was `FAILED`. The dashboard showed the job in its Failed list with the error. After the worker restarted with the right key, one click on Retry ran attempt 6: the Stripe call returned 200, the payment was recorded and the order became `PAID`. A wrong key is a realistic failure (a rotated key not yet deployed), and it showed the logging and the dashboard in one run.
