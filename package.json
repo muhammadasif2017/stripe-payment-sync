@@ -6,6 +6,10 @@
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
+  "packageManager": "npm@11.14.0",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "postinstall": "prisma generate",
     "build": "nest build",

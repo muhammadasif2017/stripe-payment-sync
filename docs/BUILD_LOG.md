@@ -304,3 +304,29 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - **Edit schedule** and **Remove scheduler** sent to the running app: both 403 "Change RECONCILIATION_CRON instead"; the scheduler is still `0 3 * * *`. `reconciliation_issues` is empty.
 - Task 4: 156 unit tests and 94 e2e tests pass; lint, type check and build are clean.
 
+## Stage 8: Tests, CI and Docker (2026-10-18)
+
+### What was built
+
+- **Task 1: Docker image, Compose services, dependency audit.** Each change and why:
+  - `Dockerfile` (new), three stages on `node:22.15.0-alpine` (the development Node version):
+    - `build`: `npm ci` (its `postinstall` generates the Prisma client) and `npm run build`.
+    - `migrate`: the build stage with `prisma migrate deploy` as its command. The Prisma CLI is a dev dependency, so migrations run from this image, not the runtime one.
+    - `runtime`: `npm ci --omit=dev --omit=optional --ignore-scripts`, then `dist/` and `public/`. It runs as the `node` user, with a `HEALTHCHECK` on `/health`.
+  - **The stage 1 `postinstall` problem is fixed by `--ignore-scripts`.** The client is generated and compiled into `dist/` in the build stage, so the runtime install doesn't need `prisma generate` or the CLI.
+  - `.dockerignore` (new): `.env` files (except `.env.example`), `node_modules`, `dist`, `.git`, `.claude`, `tasks`, `docs`, `test` stay out of the build context. The running container has no `.env`; it gets settings from Compose.
+  - `docker-compose.yml`: an `app` profile with `migrate` (runs once), `api` (`WORKER_ENABLED=false`, `127.0.0.1:3000`) and `worker` (`WORKER_ENABLED=true`, no port), all from one image. The API and the worker wait for `migrate` to finish successfully. The database and Redis URLs point at the service names. Everything else comes from `.env` through `env_file`. `init: true` forwards `SIGTERM` to Node. `docker compose up -d` still starts only PostgreSQL and Redis (decision 1).
+  - `package.json`: `"packageManager": "npm@11.14.0"` and `"engines": { "node": ">=22.12" }`. The image installs npm 11.14.0 (see Problems).
+  - `prisma/schema.prisma`: `importFileExtension = "js"` on the generator (see Problems).
+
+### Problems and fixes
+
+- **`npm ci` refused the lockfile in the image:** `Missing: typescript@5.9.3 from lock file`. The lockfile was written by npm 11.14.0; Node 22.15 ships npm 10.9.2, which resolves one optional peer dependency differently. The image now installs npm 11.14.0 (released 2026-05-06), and `packageManager` records it for CI and contributors.
+- **The Prisma CLI shipped in the "production" image.** `@prisma/client` lists the CLI as an optional peer, so the lockfile marks it `devOptional`. `--omit=dev` keeps such packages, and so does `--omit=peer`. Only `--omit=dev --omit=optional` removes it, together with `mysql2`, `@prisma/config` and TypeScript: `node_modules` went from 444 MB to 190 MB, the image from 863 MB to 534 MB. The only other optional packages are BullMQ's native msgpack speed-up (`msgpackr-extract`), which falls back to plain JavaScript, plenty for this queue's volume.
+- **`npm audit fix` was tried and reverted.** It moved the Prisma CLI to 7.10.1 (released 2026-10-15, 3 days earlier) while `@prisma/client` and the adapter stayed on 7.10.0, a version mismatch, and against the "stay on 7.10.0" rule. The 4 high findings in the production tree (`deepmerge-ts` via `@prisma/config`, `mysql2`) all sit inside the Prisma CLI, which the runtime image no longer contains. They are fixed by upgrading Prisma as one deliberate step later, not by a partial lockfile patch.
+- **The container crashed with `Cannot find module '/app/dist/generated/prisma/internal/class.ts'`.** `prisma generate` runs during `npm ci`, before `tsconfig.json` is copied into the image. Without it, Prisma's new generator infers `.ts` import extensions; on the host it reads `tsconfig.json` and writes `.js`. Setting `importFileExtension = "js"` makes the output the same everywhere. The locally generated client is unchanged.
+
+### Verified
+
+- Task 1: the full stack ran as a separate Compose project (`-p sps-check`, ports 5436, 6381 and 3002, its own volumes), so the development database and Redis were not touched. `migrate` applied all 8 migrations to the empty database and exited 0. `api` and `worker` turned healthy. `/health` returned `{"status":"ok"}`, `/` served the checkout page, `/admin/queues` returned 401. Only the worker logged `Reconciliation scheduled`. The process runs as `node` and the image has no `.env`. `docker compose stop` stopped both containers in 2 seconds with exit code 143 (Nest re-raises `SIGTERM` after its shutdown hooks; an ignored signal would take Docker's 10-second timeout). The project and its volumes were removed afterwards. 156 unit and 94 e2e tests pass; lint, type check and build are clean.
+
