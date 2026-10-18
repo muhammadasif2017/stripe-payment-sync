@@ -350,3 +350,16 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - The first attempt cloned the branch before the README commit was pushed, so it was torn down and repeated with the pushed README.
 - Task 4: 156 unit tests and 97 e2e tests pass locally; lint, type check and build are clean.
 
+
+## Preparing the repository to go public (2026-10-18)
+
+An independent review (read-only, no shared context) checked the repository before making it public: secrets in the current files and in all 71 commits, personal data, private content, code security, dependencies, hygiene and git metadata.
+
+### What it found and what changed
+
+- **No secret was ever committed.** Every Stripe-key-like string in the history is a short placeholder or a test fixture (`sk_live_supersecret` in the test that checks live keys are refused). The local `.env` was never committed.
+- **`PROJECT.md` contained private coaching notes** (marketplace strategy, resume advice, a screenshot checklist). It now holds only the fictional brief, the scope table, an architecture summary and the stage plan. The brief's "Jest" is noted as Vitest, which NestJS 12 ships with.
+- **No license.** Added `LICENSE` (MIT), `"license": "MIT"` in `package.json`, a README badge and section.
+- **`APP_PORT`** was used by Compose but missing from `.env.example`; added, commented out, with the note that `APP_URL` and the `stripe listen` port must match.
+- **Kept on purpose:** the AI-assistant files (`CLAUDE.md`, `.claude/`), which leak nothing; commit author emails and earlier file versions, which stay in history (GitHub keeps every pull request's commits, so rewriting history wouldn't remove them).
+- **Not changed (only relevant if deployed publicly):** no rate limit on `POST /checkout`, no `helmet` security headers, Docker images pinned by tag rather than digest.

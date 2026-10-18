@@ -11,6 +11,7 @@
 ![Redis 7](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
 ![BullMQ 6](https://img.shields.io/badge/BullMQ-6-C0392B)
 ![Stripe test mode](https://img.shields.io/badge/Stripe-test%20mode%20only-635BFF?logo=stripe&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
 
@@ -39,6 +40,7 @@
 - [Roadmap](#roadmap)
 - [Known limits](#known-limits)
 - [Further reading](#further-reading)
+- [License](#license)
 
 ---
 
@@ -514,3 +516,7 @@ Honest edges of the current version, each with its planned answer:
 | [`docs/TECH_STACK.md`](docs/TECH_STACK.md) | Why each technology was chosen |
 | [`docs/INTERVIEW_PREP.md`](docs/INTERVIEW_PREP.md) | The questions a client or interviewer asks about this design, answered |
 | [`PROJECT.md`](PROJECT.md) | The original brief, acceptance criteria and build plan |
+
+## License
+
+[MIT](LICENSE) © 2026 Muhammad Asif

@@ -1,12 +1,10 @@
 # Sample Project: Stripe Payment Sync
 
-Oct 9, 2026 · @Muhammad Asif
-
-A NestJS backend that receives Stripe payment events, processes them through a Redis job queue with retries, and keeps a PostgreSQL database in sync. You build it with Claude Code; it becomes the portfolio proof for Gig 3, labelled as a sample project.
+A NestJS backend that receives Stripe payment events, processes them through a Redis job queue with retries, and keeps a PostgreSQL database in sync. It is a sample project: built against the fictional brief below to show how I would solve it, not delivered to a client.
 
 ## Client brief
 
-This is a fictional brief written the way many Upwork payment-integration posts are written. Build against it as if a real client sent it, but never present it as one.
+A fictional brief, written the way many payment-integration job posts are written.
 
 > **NestJS developer to sync Stripe payments into our PostgreSQL database**
 >
@@ -27,78 +25,50 @@ This is a fictional brief written the way many Upwork payment-integration posts 
 
 ## Scope and acceptance criteria
 
-The project is done when every row below can be shown with a passing test or a screenshot. Together they cover every feature in Gig 3's Integration System package for 1 API, so the project backs up your top package.
-
-| Requirement | How you prove it |
+| Requirement | How it is proven |
 | --- | --- |
 | Stripe signature checked on every webhook | End-to-end test: a request with a wrong signature gets 400 and nothing is saved |
-| Each event processed once | Unique Stripe event ID in the database; test sends the same event twice and 1 row exists |
-| Background processing with retries | BullMQ job with 5 attempts and exponential backoff; test where the first attempt fails and the retry succeeds |
-| Failed events visible and retryable | Bull Board dashboard behind a login; screenshot of a failed job and its retry button |
-| Daily reconciliation | Scheduled job compares the last 2 days of Stripe checkouts with the database; test where a missed payment is repaired |
-| Outbound Stripe calls logged | Every call logged with the event ID, endpoint, status and duration; screenshot of the log |
+| Each event processed once | Unique Stripe event ID in the database; a test sends the same event twice and 1 row exists |
+| Background processing with retries | BullMQ job with 5 attempts and exponential backoff; a test where the first attempt fails and the retry succeeds |
+| Failed events visible and retryable | Bull Board dashboard behind a login; a failed job retried from its retry button |
+| Daily reconciliation | Scheduled job compares the last 2 days of Stripe checkouts with the database; a test where a missed payment is repaired |
+| Outbound Stripe calls logged | Every call logged with the event ID, endpoint, status and duration |
 | Orders, payments and refunds mapped | Prisma schema with orders, payments and refunds; unit tests for the mapping functions |
-| Runs with one command | `docker compose up` starts the API, worker, PostgreSQL and Redis; GitHub Actions runs the tests on every push |
+| Runs with one command | Docker Compose starts the API, worker, PostgreSQL and Redis; GitHub Actions runs the tests on every push |
 
-**Stack:** NestJS, TypeScript, Prisma, PostgreSQL, Redis, BullMQ, Bull Board, the official Stripe Node.js library, Jest, Docker and GitHub Actions.
+**Stack:** NestJS, TypeScript, Prisma, PostgreSQL, Redis, BullMQ, Bull Board, the official Stripe Node.js library, Docker and GitHub Actions. (The brief named Jest; the project uses Vitest, which NestJS 12 ships with. See [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md), stage 1.)
 
 **Out of scope:** a front end, Stripe live mode and real money, subscriptions and multiple currencies. A minimal checkout page is enough to trigger test payments.
 
 ## Architecture
 
-&#91;embedded content: Stripe payment sync · webhook to database, with retries and reconciliation\]
-
-The webhook endpoint only checks and stores the event, so it answers Stripe quickly. All the real work happens in the worker, where a failure becomes a retry instead of a lost payment.
+The webhook endpoint only checks and stores the event, so it answers Stripe quickly. All the real work happens in the worker, where a failure becomes a retry instead of a lost payment. A daily reconciliation compares Stripe with the database and repairs anything missed. The diagrams are in the [README](README.md#how-it-works).
 
 ## Build plan
 
-Build one stage at a time and commit at the end of each, so the GitHub history shows the work. Read every file Claude Code writes before moving on: a buyer or interviewer will ask why each part exists, and you need to answer without looking.
+Built in eight stages, one pull request each. What was built and verified at each stage is in [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md).
 
 1. **Project setup**
    - Build: a NestJS app with Prisma, plus a Docker Compose file for PostgreSQL and Redis. Load settings from environment variables and refuse to start if one is missing.
-   - Prompt: "Create a NestJS project with Prisma and PostgreSQL. Add docker-compose with Postgres and Redis, and a config module that validates DATABASE\_URL, REDIS\_URL, STRIPE\_SECRET\_KEY and STRIPE\_WEBHOOK\_SECRET at startup."
    - Done when: `docker compose up` runs and a health endpoint returns ok.
 2. **Data model**
    - Build: tables for Stripe events (the Stripe event ID as primary key, type, payload, status, attempts, last error), orders, payments and refunds.
-   - Done when: the migration runs and you can explain why the event ID is the primary key.
+   - Done when: the migration runs, with the reason the event ID is the primary key documented.
 3. **Test checkout**
    - Build: an endpoint that creates a pending order and a Stripe Checkout Session, with the order ID in the session metadata.
-   - Done when: a payment with Stripe's test card 4242 4242 4242 4242 shows in your Stripe test dashboard.
+   - Done when: a payment with Stripe's test card 4242 4242 4242 4242 shows in the Stripe test dashboard.
 4. **Webhook endpoint**
    - Build: enable `rawBody` in NestJS, verify the signature with `stripe.webhooks.constructEvent`, save the event, add a queue job using the event ID as the job ID, and return 200 straight away.
-   - Prompt: "Add a POST /webhooks/stripe endpoint. Verify the Stripe signature with the raw body, store the event once using its ID, enqueue a BullMQ job with the same ID, and respond 200 without doing the processing inline."
    - Done when: `stripe listen --forward-to localhost:3000/webhooks/stripe` plus `stripe trigger checkout.session.completed` saves 1 event and 1 job, and a wrong signature returns 400.
 5. **Worker with retries**
-   - Build: a BullMQ processor that fetches the latest object from Stripe, updates the order, payment or refund in one database transaction, and marks the event processed. Use 5 attempts with exponential backoff and save the error on each failure.
-   - Done when: you stop PostgreSQL while a job runs, start it again, and the job completes on a retry.
+   - Build: a BullMQ processor that fetches the latest object from Stripe, updates the order, payment or refund in one database transaction, and marks the event processed. 5 attempts with exponential backoff, saving the error on each failure.
+   - Done when: PostgreSQL is stopped while a job runs, started again, and the job completes on a retry.
 6. **Logging and dashboard**
-   - Build: a wrapper around the Stripe client that logs each call with the event ID, endpoint, status and duration. Mount Bull Board at /admin/queues behind a login.
+   - Build: a wrapper around the Stripe client that logs each call with the event ID, endpoint, status and duration. Bull Board at /admin/queues behind a login.
    - Done when: a forced failure appears on the dashboard and its retry button works.
 7. **Daily reconciliation**
    - Build: a scheduled job that lists completed Stripe checkouts from the last 2 days, finds any missing in the database and queues them.
-   - Done when: you delete a payment row, run the job, and the row comes back.
+   - Done when: a payment row is deleted, the job runs, and the row comes back.
 8. **Tests, CI and README**
-   - Build: unit tests for the mapping functions and end-to-end tests for the webhook, signing test events with `stripe.webhooks.generateTestHeaderString`. Add a GitHub Actions workflow with PostgreSQL and Redis services. Write a README with the diagram below, how to run the project and why it uses a queue.
+   - Build: unit tests for the mapping functions and end-to-end tests for the webhook, signing test events with `stripe.webhooks.generateTestHeaderString`. A GitHub Actions workflow with PostgreSQL and Redis services. A README with the architecture diagram, how to run the project and why it uses a queue.
    - Done when: CI is green and someone new can run the project from the README alone.
-
-If you finish 1 stage a day, the project takes about 8 days. Send me the repository after any stage and I will review the code.
-
-## Portfolio
-
-Add it to your Fiverr profile and to Gig 3, clearly labelled as a sample project. A buyer who later learns it was not client work will not trust anything else on the page.
-
-**Title:** Stripe Payment Sync for a NestJS Backend (sample project)
-
-**Description:**
-
-> Sample project built from a typical client brief, not client work. A NestJS backend that receives Stripe webhooks, verifies them and processes each event once through a Redis job queue with automatic retries. Failed events appear on a dashboard where they can be retried, and a daily check repairs any payment that was missed. It is tested end to end and runs with Docker.
-
-**Screenshots to take** (no URLs, emails or keys visible in any of them):
-
-- [ ] The architecture diagram from this doc, redrawn cleanly for the README
-- [ ] Bull Board showing a failed job, then the same job completed after a retry
-- [ ] The terminal with `stripe listen` forwarding events and your API answering 200
-- [ ] Log lines for the Stripe calls, with the event ID, status and duration
-- [ ] The test run, or the green GitHub Actions page
-
-**Elsewhere:** the GitHub repository can be linked on Upwork and LinkedIn, which allow links. Once it is built, you can also add it to the Selected Engineering Projects section of your resume, because webhooks and reconciliation will then be work you have actually done.
