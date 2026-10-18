@@ -287,9 +287,14 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - `src/worker/mapping.ts`, `src/worker/stripe-event-handler.ts`: `PermanentProcessingError` can carry the order ID; the repair fills it in, so the issue row says which order to look at.
   - `src/reconciliation/missing-payments.ts`, `reconciliation.service.ts`: sessions with an open issue are skipped and counted as `openIssues`. The summary also reports `openIssuesTotal`, and every run with open issues logs `N open reconciliation issue(s) need review`. A resolved issue is tried again on the next run.
   - Tests: 2 unit tests (an open issue is skipped; a recorded payment wins over a stale open issue), 1 reconciliation e2e (skipped and reported while open, queued again once resolved), 1 worker e2e (an amount mismatch is recorded once, then updated and reopened by a second failure).
+- **Task 3: The schedule changes only through `RECONCILIATION_CRON`.** Each change and why:
+  - `src/admin/schedule-guard.ts` (new): refuses Bull Board's `PATCH .../job-schedulers/:id` (Edit schedule) and `PUT .../job-schedulers/:id/remove` (Remove scheduler) with 403 and "Change RECONCILIATION_CRON instead". The worker re-registers the scheduler from the setting at every start, so an edit on the dashboard would be undone without a word. **Run now** is not matched and still works. Bull Board's read-only mode would have hidden Retry and Run now too, so the guard is in code.
+  - `src/admin/admin.module.ts`: the dashboard's middleware is now login, then cross-site check, then schedule guard.
+  - Tests: `src/admin/schedule-guard.spec.ts` (7: the two changes refused, also with a query string; Run now, the list, a job retry and a job data update let through), `test/reconciliation-schedule.e2e-spec.ts` (+1: both routes get 403 from the real dashboard and the scheduler keeps `0 3 * * *`).
 
 ### Verified
 
 - Task 1: 35 handler and worker e2e tests pass. Disabling the `UPDATE` fails 3 tests; skipping the job cleanup fails 1. All 8 migrations apply to an empty throwaway database (`payments_replay`, dropped afterwards), and the enum lists `RECONCILED`.
 - Task 2: 12 reconciliation unit tests and 23 reconciliation and worker e2e tests pass. Not recording the issue fails the worker test; not skipping open issues fails a unit test and the e2e test. One run failed 2 worker tests with a test lasting about 3 hours: the laptop had gone to sleep mid-run. The re-run passed unchanged.
+- Task 3: 28 admin unit tests and 17 dashboard and schedule e2e tests pass. Taking the guard out of the middleware chain fails the e2e test.
 

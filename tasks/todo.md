@@ -51,12 +51,12 @@
 **Description:** The dashboard guard refuses Bull Board's edit-scheduler and remove-scheduler routes.
 
 **Acceptance criteria:**
-- [ ] `PATCH .../job-schedulers/:id` and `PUT .../job-schedulers/:id/remove` get `403` with "Change RECONCILIATION_CRON instead"
-- [ ] `PUT .../job-schedulers/:id/run` still allowed
+- [x] `PATCH .../job-schedulers/:id` and `PUT .../job-schedulers/:id/remove` get `403` with "Change RECONCILIATION_CRON instead"
+- [x] `PUT .../job-schedulers/:id/run` still allowed
 
 **Verification:**
-- [ ] Unit tests for the route matching; e2e for the three routes with a real worker
-- [ ] Prove a test can fail
+- [x] Unit tests for the route matching; e2e for the three routes with a real worker
+- [x] Prove a test can fail
 
 **Dependencies:** None
 

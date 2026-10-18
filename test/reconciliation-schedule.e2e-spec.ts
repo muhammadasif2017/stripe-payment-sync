@@ -76,4 +76,26 @@ describe('Reconciliation schedule (e2e)', () => {
     // "Run now" leaves the schedule as it was.
     expect(await queue.getJobSchedulersCount()).toBe(1);
   });
+
+  const schedulerRoute = `/admin/queues/api/queues/${RECONCILIATION_QUEUE}/job-schedulers/${RECONCILIATION_SCHEDULER_ID}`;
+
+  it('refuses "Edit schedule" and "Remove scheduler"; the schedule is unchanged', async () => {
+    const server = app.getHttpServer();
+    const edit = await request(server)
+      .patch(schedulerRoute)
+      .auth('admin', 'e2e-dashboard-password')
+      .set('Sec-Fetch-Site', 'same-origin')
+      .send({ pattern: '* * * * *' })
+      .expect(403);
+    await request(server)
+      .put(`${schedulerRoute}/remove`)
+      .auth('admin', 'e2e-dashboard-password')
+      .set('Sec-Fetch-Site', 'same-origin')
+      .expect(403);
+
+    expect((edit.body as { message: string }).message).toBe('Change RECONCILIATION_CRON instead');
+    expect(await queue.getJobSchedulers()).toEqual([
+      expect.objectContaining({ key: RECONCILIATION_SCHEDULER_ID, pattern: '0 3 * * *' }),
+    ]);
+  });
 });

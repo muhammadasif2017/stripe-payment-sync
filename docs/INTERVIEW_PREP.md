@@ -259,3 +259,6 @@ The repair looks for unsettled events of one payment. Nearly every row in `strip
 **What happens to a payment that can never be repaired?**
 For example, a paid session whose amount doesn't match its order. Before, it was found missing every day and its repair failed every day: one more failed job per day, forever. Now the first permanent failure writes one row in `reconciliation_issues` with the reason. Later runs skip that session, count it, and log a daily "N open issues need review". Once someone fixes the data and sets `resolved_at`, the next run tries again, and a new failure reopens the same row. A problem becomes a to-do item instead of noise.
 
+**Why block "Edit schedule" on the dashboard?**
+Because it would lie. The worker registers the scheduler from `RECONCILIATION_CRON` at every start, so a change made on the dashboard lasts only until the next deploy or restart, and nothing says it was undone. One source of truth is safer: the dashboard refuses the edit with "Change RECONCILIATION_CRON instead", and the setting is checked at startup. "Run now" stays, because running once doesn't change the schedule.
+
