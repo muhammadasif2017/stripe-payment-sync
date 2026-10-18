@@ -265,3 +265,11 @@ Because it would lie. The worker registers the scheduler from `RECONCILIATION_CR
 **Did you ever see the 2-day window matter?**
 Yes, by accident. The follow-up's manual check ran two days after the test payment it used, so reconciliation listed nothing and couldn't restore the deleted row. It was a useful reminder that the window is a real edge, not a theoretical one. The fix for that run was to queue the same repair job by hand from the dashboard; the longer-term fix would be a window option on the job for one-off catch-ups.
 
+## Stage 8: Tests, CI and Docker
+
+**What stops someone guessing the dashboard password?**
+A 16-character minimum, and a rate limit: after 10 failed logins from one IP in 15 minutes, the dashboard answers 429 to that IP, even with the right password, until the window passes. Only failed logins count, so real use is never limited. The limit sits first in the middleware chain, so a locked-out client doesn't even reach the password check. The counts are in memory, which is fine for one API process; with several you would move them to Redis.
+
+**Why does the production image install with `--omit=dev --omit=optional`?**
+`@prisma/client` lists the Prisma CLI as an optional peer, so npm marks the CLI "devOptional" and `--omit=dev` alone keeps it. That would ship a migration tool and its dependencies, including 4 known vulnerabilities, in every container. Omitting optional packages too drops it, and the image's dependencies shrank from 444 MB to 190 MB. It was found by looking inside the built image, not by trusting the flag.
+

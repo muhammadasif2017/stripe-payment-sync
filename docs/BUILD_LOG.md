@@ -318,6 +318,10 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - `docker-compose.yml`: an `app` profile with `migrate` (runs once), `api` (`WORKER_ENABLED=false`, `127.0.0.1:3000`) and `worker` (`WORKER_ENABLED=true`, no port), all from one image. The API and the worker wait for `migrate` to finish successfully. The database and Redis URLs point at the service names. Everything else comes from `.env` through `env_file`. `init: true` forwards `SIGTERM` to Node. `docker compose up -d` still starts only PostgreSQL and Redis (decision 1).
   - `package.json`: `"packageManager": "npm@11.14.0"` and `"engines": { "node": ">=22.12" }`. The image installs npm 11.14.0 (see Problems).
   - `prisma/schema.prisma`: `importFileExtension = "js"` on the generator (see Problems).
+- **Task 2: Dashboard login rate limit (decision 3).** Each change and why:
+  - `src/admin/login-limit.ts` (new), `package.json`: `express-rate-limit` `8.7.0`, exact (8.7.1 was 12 days old). After 10 failed logins (401) from one IP address within 15 minutes, every dashboard request from it gets 429 until the window passes, even with the right password. That turns password guessing from thousands of tries a minute into 10 per quarter hour. Only 401s count, so an admin using the dashboard is never limited by their own 403s or 404s. Counts live in the API process's memory; several API processes would need a shared store such as Redis.
+  - `src/admin/admin.module.ts`: the limit runs first in the dashboard's middleware chain, so a locked-out IP never reaches the password check.
+  - `test/admin-login-limit.e2e-spec.ts` (new, its own app so its failures don't affect other tests): successful logins aren't counted; 10 wrong passwords, then the right one gets 429 with a `RateLimit-Policy` header; `/health` isn't limited.
 
 ### Problems and fixes
 
@@ -329,4 +333,5 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
 ### Verified
 
 - Task 1: the full stack ran as a separate Compose project (`-p sps-check`, ports 5436, 6381 and 3002, its own volumes), so the development database and Redis were not touched. `migrate` applied all 8 migrations to the empty database and exited 0. `api` and `worker` turned healthy. `/health` returned `{"status":"ok"}`, `/` served the checkout page, `/admin/queues` returned 401. Only the worker logged `Reconciliation scheduled`. The process runs as `node` and the image has no `.env`. `docker compose stop` stopped both containers in 2 seconds with exit code 143 (Nest re-raises `SIGTERM` after its shutdown hooks; an ignored signal would take Docker's 10-second timeout). The project and its volumes were removed afterwards. 156 unit and 94 e2e tests pass; lint, type check and build are clean.
+- Task 2: 97 e2e tests pass. Replacing the limiter with a pass-through fails the lockout test.
 

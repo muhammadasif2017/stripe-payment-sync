@@ -7,6 +7,7 @@ import type { Env } from '../config/env.validation.js';
 import { RECONCILIATION_QUEUE, STRIPE_EVENTS_QUEUE } from '../queue/queue.module.js';
 import type { RequestHandler } from 'express';
 import { createBasicAuth } from './basic-auth.js';
+import { createLoginLimiter } from './login-limit.js';
 import { rejectCrossSite } from './same-origin.js';
 import { rejectScheduleChanges } from './schedule-guard.js';
 
@@ -14,14 +15,17 @@ import { rejectScheduleChanges } from './schedule-guard.js';
 export const DASHBOARD_ROUTE = '/admin/queues';
 
 /**
- * The login, then the cross-site check, then the schedule guard, in that order: Bull Board's
- * `middleware` option takes one function.
+ * The login rate limit, the login, the cross-site check, then the schedule guard, in that order:
+ * Bull Board's `middleware` option takes one function.
+ * @param loginLimit The failed-login rate limit; first, so a locked-out IP never reaches the check.
  * @param basicAuth The Basic auth middleware.
  */
-function dashboardGuard(basicAuth: RequestHandler): RequestHandler {
+function dashboardGuard(loginLimit: RequestHandler, basicAuth: RequestHandler): RequestHandler {
   return (req, res, next) =>
-    basicAuth(req, res, () =>
-      rejectCrossSite(req, res, () => rejectScheduleChanges(req, res, next)),
+    loginLimit(req, res, () =>
+      basicAuth(req, res, () =>
+        rejectCrossSite(req, res, () => rejectScheduleChanges(req, res, next)),
+      ),
     );
 }
 
@@ -39,6 +43,7 @@ function dashboardGuard(basicAuth: RequestHandler): RequestHandler {
         route: DASHBOARD_ROUTE,
         adapter: ExpressAdapter,
         middleware: dashboardGuard(
+          createLoginLimiter(),
           createBasicAuth({
             username: config.get('ADMIN_USERNAME', { infer: true }),
             password: config.get('ADMIN_PASSWORD', { infer: true }),

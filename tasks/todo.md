@@ -5,7 +5,7 @@
 **Description:** A multi-stage Dockerfile and an `app` Compose profile that runs migrations, the API and the worker; fix the stage 1 `postinstall` problem; apply the non-breaking audit fix.
 
 **Acceptance criteria:**
-- [x] `Dockerfile` (build, runtime, migrate) on `node:22.15.0-alpine`; runtime uses `npm ci --omit=dev --ignore-scripts`, runs as `node`, has a `/health` healthcheck, contains `dist/`, `public/`, `prisma/`
+- [x] `Dockerfile` (build, runtime, migrate) on `node:22.15.0-alpine`; runtime uses `npm ci --omit=dev --omit=optional --ignore-scripts`, runs as `node`, has a `/health` healthcheck, contains `dist/` and `public/` (migrations run from the `migrate` target)
 - [x] `.dockerignore` keeps `.env`, `node_modules`, `dist`, `.git` and local folders out
 - [x] Compose `app` profile: `migrate` (once), `api` (`WORKER_ENABLED=false`, `127.0.0.1:3000`), `worker`; URLs point at service names; `init: true`; `docker compose up -d` unchanged
 - [x] `npm audit fix` (no `--force`) tried; reverted because it split Prisma versions; remaining findings documented (none in the runtime image)
@@ -24,12 +24,12 @@
 ## Task 2: Dashboard login rate limit (decision 3)
 
 **Acceptance criteria:**
-- [ ] After 10 failed logins from one IP in 15 minutes, `/admin/queues` answers 429 until the window passes; successful logins don't count
-- [ ] Limit applies only to the dashboard
+- [x] After 10 failed logins from one IP in 15 minutes, `/admin/queues` answers 429 until the window passes; successful logins don't count
+- [x] Limit applies only to the dashboard
 
 **Verification:**
-- [ ] e2e: 10 wrong passwords, then the 11th request (even with the right password) gets 429; another route is unaffected
-- [ ] Prove the test can fail
+- [x] e2e: 10 wrong passwords, then the 11th request (even with the right password) gets 429; another route is unaffected
+- [x] Prove the test can fail
 
 **Dependencies:** None
 
@@ -38,7 +38,7 @@
 **Estimated scope:** Small
 
 ## Checkpoint: Images and app
-- [ ] Tasks 1–2 verified, all five checks pass, commit
+- [x] Tasks 1–2 verified, all five checks pass, commit
 
 ## Task 3: GitHub Actions workflow
 
