@@ -8,16 +8,21 @@ import { RECONCILIATION_QUEUE, STRIPE_EVENTS_QUEUE } from '../queue/queue.module
 import type { RequestHandler } from 'express';
 import { createBasicAuth } from './basic-auth.js';
 import { rejectCrossSite } from './same-origin.js';
+import { rejectScheduleChanges } from './schedule-guard.js';
 
 /** Where the queue dashboard is served. */
 export const DASHBOARD_ROUTE = '/admin/queues';
 
 /**
- * The login first, then the cross-site check: Bull Board's `middleware` option takes one function.
+ * The login, then the cross-site check, then the schedule guard, in that order: Bull Board's
+ * `middleware` option takes one function.
  * @param basicAuth The Basic auth middleware.
  */
 function dashboardGuard(basicAuth: RequestHandler): RequestHandler {
-  return (req, res, next) => basicAuth(req, res, () => rejectCrossSite(req, res, next));
+  return (req, res, next) =>
+    basicAuth(req, res, () =>
+      rejectCrossSite(req, res, () => rejectScheduleChanges(req, res, next)),
+    );
 }
 
 /**

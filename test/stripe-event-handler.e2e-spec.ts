@@ -383,6 +383,61 @@ describe('StripeEventHandler (e2e)', () => {
       expect(s.id).toBeDefined();
     });
 
+    it("marks the payment's unsettled events RECONCILED, keeping their error, and returns them", async () => {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id);
+      const s = session(order.id, pi.id!);
+      const refund = {
+        id: uid('re_test'),
+        amount: 1000,
+        currency: 'usd',
+        status: 'succeeded' as const,
+        payment_intent: pi.id,
+      };
+      stripeState.refunds[pi.id!] = [refund];
+      const completed = await storedEvent('checkout.session.completed', { id: s.id });
+      await prisma.stripeEvent.update({
+        where: { id: completed.id },
+        data: { status: 'FAILED', attempts: 5, lastError: 'Error: Connection refused' },
+      });
+      const refunded = await storedEvent('refund.updated', {
+        id: refund.id,
+        payment_intent: pi.id,
+      });
+      const alreadyDone = await storedEvent('payment_intent.payment_failed', { id: pi.id });
+      await prisma.stripeEvent.update({
+        where: { id: alreadyDone.id },
+        data: { status: 'PROCESSED' },
+      });
+      const otherPayment = await storedEvent('payment_intent.canceled', { id: uid('pi_test') });
+
+      const settled = await handler.reconcileSession(s.id!);
+
+      expect(settled.sort()).toEqual([completed.id, refunded.id].sort());
+      const status = async (id: string) => prisma.stripeEvent.findUniqueOrThrow({ where: { id } });
+      expect(await status(completed.id)).toMatchObject({
+        status: 'RECONCILED',
+        attempts: 5,
+        lastError: 'Error: Connection refused',
+      });
+      expect((await status(refunded.id)).status).toBe('RECONCILED');
+      expect((await status(alreadyDone.id)).status).toBe('PROCESSED');
+      expect((await status(otherPayment.id)).status).toBe('PENDING');
+    });
+
+    it('settles no event when the repair fails (one transaction)', async () => {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id, { amount: 9900, amount_received: 9900 });
+      const s = session(order.id, pi.id!, { amount_total: 9900 });
+      const stuck = await storedEvent('checkout.session.completed', { id: s.id });
+
+      await expect(handler.reconcileSession(s.id!)).rejects.toThrow(PermanentProcessingError);
+
+      expect((await prisma.stripeEvent.findUniqueOrThrow({ where: { id: stuck.id } })).status).toBe(
+        'PENDING',
+      );
+    });
+
     it('fails permanently for a session without an order_id', async () => {
       const s = session('', null, { metadata: {}, client_reference_id: null });
 

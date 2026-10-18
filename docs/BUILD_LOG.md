@@ -270,3 +270,37 @@ The same rules were already in `CLAUDE.md`, but an instruction file is advice th
   - A second run: `0 missing and queued, 4 already recorded`. The same "Run now" request sent with `Origin: https://evil.example` got 403.
   - The development Redis keeps the `daily-reconciliation` scheduler, as intended: the next worker start finds it and updates it.
 - Task 4: 147 unit tests and 87 e2e tests pass; lint, type check and build are clean.
+
+## Stage 7 follow-up: closing reconciliation's known limits (2026-10-16)
+
+### What was built
+
+- **Task 1: Repairs settle the events they cover.** Each change and why:
+  - `prisma/schema.prisma`, migration `reconciled_status_and_issues`: a new event status `RECONCILED`, meaning a reconciliation repair settled the event rather than the worker processing it. The same migration creates the `reconciliation_issues` table used by task 2.
+  - Migration `unsettled_events_index` (hand-written): a partial index on `stripe_events (status) WHERE status <> 'PROCESSED'`. Almost every row is `PROCESSED`, so the index holds only the few unsettled rows. Stage 2 deferred a status index until a query needed one; the repair's lookup is that query. `EXPLAIN` confirms PostgreSQL uses it. Prisma's schema language can't express a partial index; a probe migration created afterwards came out empty, so Prisma won't try to drop it.
+  - `src/worker/stripe-event-handler.ts`: in the repair's transaction, one `UPDATE ... RETURNING` marks `RECONCILED` every unsettled event whose `data.object.id` is the session or its payment intent, or whose `data.object.payment_intent` is that payment intent (charge and refund events). `last_error` and `attempts` stay as the record of what went wrong. `reconcileSession` returns the settled event IDs. A repair that fails rolls back and settles nothing.
+  - `src/worker/stripe-events.processor.ts`: after a repair commits, the failed job of each settled event (job ID = event ID) is removed, so the dashboard's Failed list shows only what still needs attention (decision 1). A failure to remove is logged and doesn't fail the repair. Events already `RECONCILED` are skipped like `PROCESSED` ones.
+  - Tests: `test/stripe-event-handler.e2e-spec.ts` (+2: a `FAILED` session event and a `PENDING` refund event of the payment become `RECONCILED` with their error kept, while a `PROCESSED` event and another payment's event are untouched; a failing repair settles nothing). `test/worker.e2e-spec.ts` (+2: a repair removes the settled event's failed job; a `RECONCILED` event is skipped without calling Stripe). The stage 7 test that asserted the old behaviour (a repaired payment's event stays `PENDING`) now expects `RECONCILED`, on purpose.
+- **Task 2: A repair that can't succeed becomes one recorded issue.** Each change and why:
+  - `reconciliation_issues` table (created by task 1's migration): one row per Checkout Session, with the order ID when known, the reason, first and last seen, and `resolved_at` (null while open). No foreign key to orders, because the issue may be that the order doesn't exist.
+  - `src/worker/stripe-events.processor.ts`: when a `reconcile-session` repair fails with a permanent error, it upserts an open issue for the session. A repeat failure updates the same row and reopens it if it had been resolved; `first_seen_at` is kept. A failure to save the issue is logged and never replaces the original error, the same rule as stage 5's error recording.
+  - `src/worker/mapping.ts`, `src/worker/stripe-event-handler.ts`: `PermanentProcessingError` can carry the order ID; the repair fills it in, so the issue row says which order to look at.
+  - `src/reconciliation/missing-payments.ts`, `reconciliation.service.ts`: sessions with an open issue are skipped and counted as `openIssues`. The summary also reports `openIssuesTotal`, and every run with open issues logs `N open reconciliation issue(s) need review`. A resolved issue is tried again on the next run.
+  - Tests: 2 unit tests (an open issue is skipped; a recorded payment wins over a stale open issue), 1 reconciliation e2e (skipped and reported while open, queued again once resolved), 1 worker e2e (an amount mismatch is recorded once, then updated and reopened by a second failure).
+- **Task 3: The schedule changes only through `RECONCILIATION_CRON`.** Each change and why:
+  - `src/admin/schedule-guard.ts` (new): refuses Bull Board's `PATCH .../job-schedulers/:id` (Edit schedule) and `PUT .../job-schedulers/:id/remove` (Remove scheduler) with 403 and "Change RECONCILIATION_CRON instead". The worker re-registers the scheduler from the setting at every start, so an edit on the dashboard would be undone without a word. **Run now** is not matched and still works. Bull Board's read-only mode would have hidden Retry and Run now too, so the guard is in code.
+  - `src/admin/admin.module.ts`: the dashboard's middleware is now login, then cross-site check, then schedule guard.
+  - Tests: `src/admin/schedule-guard.spec.ts` (7: the two changes refused, also with a query string; Run now, the list, a job retry and a job data update let through), `test/reconciliation-schedule.e2e-spec.ts` (+1: both routes get 403 from the real dashboard and the scheduler keeps `0 3 * * *`).
+
+### Verified
+
+- Task 1: 35 handler and worker e2e tests pass. Disabling the `UPDATE` fails 3 tests; skipping the job cleanup fails 1. All 8 migrations apply to an empty throwaway database (`payments_replay`, dropped afterwards), and the enum lists `RECONCILED`.
+- Task 2: 12 reconciliation unit tests and 23 reconciliation and worker e2e tests pass. Not recording the issue fails the worker test; not skipping open issues fails a unit test and the e2e test. One run failed 2 worker tests with a test lasting about 3 hours: the laptop had gone to sleep mid-run. The re-run passed unchanged.
+- Task 3: 28 admin unit tests and 17 dashboard and schedule e2e tests pass. Taking the guard out of the middleware chain fails the e2e test.
+- Task 4, the manual check in the development database (decision 2):
+  - Before: event `evt_1UR5EiGImTS0y0GhR9DZONIG` `PROCESSED` with 6 attempts; payment `pi_3UR5EgGImTS0y0Gh01L7xMXK` present. The two approved statements ran: `UPDATE 1` (event set to `FAILED`), `DELETE 1` (payment).
+  - **Run now** checked **0 sessions**. Two days had passed since the stage 6 checkout (created 2026-10-16 07:07 UTC; the run was 2026-10-18 16:54 UTC), so it was just outside the 2-day window. That is the documented window limit, seen for real.
+  - To restore the data and still exercise the new code, one `reconcile-session` job for that session was added through the dashboard's "add job" API (same-origin, logged in): the job reconciliation would have queued. Log: `Repaired Checkout Session cs_test_a1sC… (attempt 1); marked RECONCILED: evt_1UR5EiGImTS0y0GhR9DZONIG`. After: the payment is back (4900 `usd`, `SUCCEEDED`, new row ID), the order `PAID`, the event `RECONCILED` with its 6 attempts kept. That event's job had completed in stage 6, so there was no failed job to clear; the e2e test covers that path.
+  - **Edit schedule** and **Remove scheduler** sent to the running app: both 403 "Change RECONCILIATION_CRON instead"; the scheduler is still `0 3 * * *`. `reconciliation_issues` is empty.
+- Task 4: 156 unit tests and 94 e2e tests pass; lint, type check and build are clean.
+

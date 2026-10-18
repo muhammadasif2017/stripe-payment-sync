@@ -22,8 +22,12 @@ export interface ReconciliationSummary {
   unknownOrder: number;
   /** Paid, and the database already has a SUCCEEDED payment for it. */
   alreadyRecorded: number;
+  /** Missing, but an earlier repair failed for good: an open reconciliation issue, not retried. */
+  openIssues: number;
   /** Paid at Stripe, missing from the database: one repair job queued for each. */
   missing: number;
+  /** Open reconciliation issues in total, in or out of this window: the daily reminder. */
+  openIssuesTotal: number;
 }
 
 /**
@@ -44,23 +48,26 @@ export function paymentIntentIdOf(
 
 /**
  * Picks the sessions whose payment is missing from the database: paid at Stripe, belonging to an
- * order that exists, and with no SUCCEEDED payment for their payment intent. Everything else is
- * counted under the reason it was skipped.
+ * order that exists, with no SUCCEEDED payment for their payment intent and no open reconciliation
+ * issue. Everything else is counted under the reason it was skipped.
  * @param sessions Completed sessions from Stripe.
  * @param knownOrderIds Order IDs that exist in the database.
  * @param recordedPaymentIntentIds Payment intents that have a SUCCEEDED payment row.
+ * @param openIssueSessionIds Sessions whose repair failed for good and isn't resolved yet.
  */
 export function selectMissing(
   sessions: ListedSession[],
   knownOrderIds: ReadonlySet<string>,
   recordedPaymentIntentIds: ReadonlySet<string>,
-): { missing: ListedSession[]; summary: ReconciliationSummary } {
-  const summary: ReconciliationSummary = {
+  openIssueSessionIds: ReadonlySet<string> = new Set(),
+): { missing: ListedSession[]; summary: Omit<ReconciliationSummary, 'openIssuesTotal'> } {
+  const summary: Omit<ReconciliationSummary, 'openIssuesTotal'> = {
     checked: sessions.length,
     notPaid: 0,
     noOrderId: 0,
     unknownOrder: 0,
     alreadyRecorded: 0,
+    openIssues: 0,
     missing: 0,
   };
   const missing: ListedSession[] = [];
@@ -76,6 +83,8 @@ export function selectMissing(
       summary.unknownOrder++;
     } else if (recordedPaymentIntentIds.has(paymentIntentId)) {
       summary.alreadyRecorded++;
+    } else if (openIssueSessionIds.has(session.id)) {
+      summary.openIssues++;
     } else {
       summary.missing++;
       missing.push(session);

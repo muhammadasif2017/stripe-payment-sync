@@ -94,7 +94,31 @@ describe('selectMissing', () => {
       noOrderId: 1,
       unknownOrder: 0,
       alreadyRecorded: 1,
+      openIssues: 0,
       missing: 1,
     });
+  });
+
+  it('skips a missing session with an open issue and counts it', () => {
+    const { missing, summary } = selectMissing(
+      [session()],
+      known,
+      new Set(),
+      new Set(['cs_test_1']),
+    );
+
+    expect(missing).toEqual([]);
+    expect(summary).toMatchObject({ openIssues: 1, missing: 0 });
+  });
+
+  it('counts a recorded payment as recorded even if an old issue is still open', () => {
+    const { summary } = selectMissing(
+      [session()],
+      known,
+      new Set(['pi_1']),
+      new Set(['cs_test_1']),
+    );
+
+    expect(summary).toMatchObject({ alreadyRecorded: 1, openIssues: 0 });
   });
 });

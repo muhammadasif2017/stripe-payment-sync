@@ -248,3 +248,20 @@ Unix seconds. JavaScript dates are in milliseconds, and passing milliseconds wou
 **Show me reconciliation working.**
 A payment row was deleted from the development database, then "Run now" was pressed on the dashboard. The run listed 5 completed sessions from Stripe, found 2 paid sessions without a payment, and queued 2 repairs, which completed within a second. One was the deleted row. The other was a real gap nobody had planted: a test payment from before the webhook existed, whose order had sat at `PENDING` for a day. A second run found nothing missing. It is a good example of why the check exists: the webhook path had no way to know about that payment.
 
+## Stage 7 follow-up: closing the known limits
+
+**A repair fixed the payment. What happens to the event that got stuck?**
+In the same transaction, the repair marks the payment's unsettled events `RECONCILED`: a separate status, because "the worker processed it" and "a repair made it right" are different facts and an audit needs the difference. The original error and attempt count stay on the row. Afterwards the event's failed job is removed from the dashboard, so the Failed list only shows what still needs a person.
+
+**Why a partial index?**
+The repair looks for unsettled events of one payment. Nearly every row in `stripe_events` is `PROCESSED`, so a normal index on `status` would be large and mostly useless. A partial index (`WHERE status <> 'PROCESSED'`) holds only the handful of open rows, stays tiny as the table grows, and lets PostgreSQL skip the whole processed history before it reads any JSON.
+
+**What happens to a payment that can never be repaired?**
+For example, a paid session whose amount doesn't match its order. Before, it was found missing every day and its repair failed every day: one more failed job per day, forever. Now the first permanent failure writes one row in `reconciliation_issues` with the reason. Later runs skip that session, count it, and log a daily "N open issues need review". Once someone fixes the data and sets `resolved_at`, the next run tries again, and a new failure reopens the same row. A problem becomes a to-do item instead of noise.
+
+**Why block "Edit schedule" on the dashboard?**
+Because it would lie. The worker registers the scheduler from `RECONCILIATION_CRON` at every start, so a change made on the dashboard lasts only until the next deploy or restart, and nothing says it was undone. One source of truth is safer: the dashboard refuses the edit with "Change RECONCILIATION_CRON instead", and the setting is checked at startup. "Run now" stays, because running once doesn't change the schedule.
+
+**Did you ever see the 2-day window matter?**
+Yes, by accident. The follow-up's manual check ran two days after the test payment it used, so reconciliation listed nothing and couldn't restore the deleted row. It was a useful reminder that the window is a real edge, not a theoretical one. The fix for that run was to queue the same repair job by hand from the dashboard; the longer-term fix would be a window option on the job for one-off catch-ups.
+

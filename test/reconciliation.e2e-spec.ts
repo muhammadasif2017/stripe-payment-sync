@@ -74,6 +74,7 @@ describe('Reconciliation run (e2e)', () => {
   });
 
   afterAll(async () => {
+    await prisma?.reconciliationIssue.deleteMany({ where: { orderId: { in: orderIds } } });
     await prisma?.payment.deleteMany({ where: { orderId: { in: orderIds } } });
     await prisma?.order.deleteMany({ where: { id: { in: orderIds } } });
     await queue?.obliterate({ force: true });
@@ -137,6 +138,8 @@ describe('Reconciliation run (e2e)', () => {
       noOrderId: 1,
       notPaid: 0,
       unknownOrder: 0,
+      openIssues: 0,
+      openIssuesTotal: expect.any(Number),
     });
     expect(await queuedRepairs()).toEqual([
       {
@@ -183,6 +186,34 @@ describe('Reconciliation run (e2e)', () => {
       `reconcile-${missing.id}-1000000`,
       `reconcile-${missing.id}-2000000`,
     ]);
+  });
+
+  it('skips a session with an open issue, reports it, and retries it once resolved', async () => {
+    const stuck = await paidSession(false);
+    const issue = await prisma.reconciliationIssue.create({
+      data: {
+        stripeCheckoutSessionId: stuck.id,
+        orderId: stuck.metadata.order_id,
+        reason: 'The session charges 9900 usd but order … is 4900 usd',
+      },
+    });
+    const warn = vi.mocked(Logger.prototype.warn);
+
+    const first = await service.run(new Date(3_000_000));
+
+    expect(first).toMatchObject({ missing: 0, openIssues: 1 });
+    expect(first.openIssuesTotal).toBeGreaterThanOrEqual(1);
+    expect(await queuedRepairs()).toEqual([]);
+    expect(warn.mock.calls.some(([line]) => String(line).includes('need review'))).toBe(true);
+
+    await prisma.reconciliationIssue.update({
+      where: { id: issue.id },
+      data: { resolvedAt: new Date() },
+    });
+    const second = await service.run(new Date(4_000_000));
+
+    expect(second).toMatchObject({ missing: 1, openIssues: 0 });
+    expect((await queuedRepairs()).map((job) => job.id)).toEqual([`reconcile-${stuck.id}-4000000`]);
   });
 
   it('queues nothing when every payment is recorded', async () => {

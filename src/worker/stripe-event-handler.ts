@@ -62,13 +62,15 @@ export class StripeEventHandler {
 
   /**
    * Repairs one paid Checkout Session found by reconciliation: fetches the session, its payment intent
-   * and all the payment intent's refunds, and writes them like an event would. No `stripe_events` row
-   * is involved. Safe to run any number of times.
+   * and all the payment intent's refunds, and writes them like an event would. In the same
+   * transaction, the payment's events that never got processed (PENDING or FAILED) are marked
+   * RECONCILED. Safe to run any number of times.
    * @param sessionId The Checkout Session (`cs_...`).
+   * @returns The IDs of the events marked RECONCILED, so their failed jobs can be cleared.
    * @throws PermanentProcessingError when retrying can't help (no matching order, amounts that don't
    *   match, a session Stripe says doesn't exist); any other error is worth retrying.
    */
-  async reconcileSession(sessionId: string): Promise<void> {
+  async reconcileSession(sessionId: string): Promise<string[]> {
     const context = { job: 'reconciliation' };
     const snapshot = await withStripeErrors(async (): Promise<Snapshot> => {
       const session = await this.stripeCalls.run('checkout.sessions.retrieve', context, () =>
@@ -86,20 +88,28 @@ export class StripeEventHandler {
         refunds: paymentIntent ? await this.listRefunds(paymentIntent.id, context) : undefined,
       };
     });
-    await this.apply(snapshot, `session ${sessionId}`);
+    try {
+      return await this.apply(snapshot, `session ${sessionId}`);
+    } catch (error) {
+      if (error instanceof PermanentProcessingError) {
+        error.orderId ??= snapshot.orderId;
+      }
+      throw error;
+    }
   }
 
   /**
    * Writes a snapshot in one transaction.
    * @param source What the snapshot came from, for error messages.
    * @param event The event to mark PROCESSED in the same transaction; none for a repair.
+   * @returns For a repair, the IDs of the events it settled; for an event, an empty list.
    */
   private async apply(
     snapshot: Snapshot,
     source: string,
     event?: { id: string; attempt: number },
-  ): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
+  ): Promise<string[]> {
+    return this.prisma.$transaction(async (tx) => {
       // Lock the order row: two jobs for the same order (say, a payment and a refund) wait for each
       // other instead of both computing the status from rows the other is about to change.
       const locked = await tx.$queryRaw<{ id: string }[]>`
@@ -187,7 +197,22 @@ export class StripeEventHandler {
             processedAt: new Date(),
           },
         });
+        return [];
       }
+
+      // A repair: settle the events about this payment that never got processed, so the history
+      // doesn't keep showing them as stuck. Matched on the session or payment intent ID, or on the
+      // payment intent a charge or refund event points at. `last_error` and `attempts` stay as a
+      // record of what went wrong. The status condition matches the partial index
+      // stripe_events_unsettled_idx, so only the few unsettled rows are read.
+      const objectIds = [snapshot.session?.id, pi?.id].filter((id): id is string => Boolean(id));
+      const settled = await tx.$queryRaw<{ id: string }[]>`
+        UPDATE stripe_events SET status = 'RECONCILED'
+        WHERE status <> 'PROCESSED' AND status <> 'RECONCILED'
+          AND (payload->'data'->'object'->>'id' = ANY(${objectIds})
+            OR payload->'data'->'object'->>'payment_intent' = ${pi?.id ?? null})
+        RETURNING id`;
+      return settled.map((row) => row.id);
     });
   }
 
