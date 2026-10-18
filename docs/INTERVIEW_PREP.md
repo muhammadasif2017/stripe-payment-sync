@@ -262,3 +262,6 @@ For example, a paid session whose amount doesn't match its order. Before, it was
 **Why block "Edit schedule" on the dashboard?**
 Because it would lie. The worker registers the scheduler from `RECONCILIATION_CRON` at every start, so a change made on the dashboard lasts only until the next deploy or restart, and nothing says it was undone. One source of truth is safer: the dashboard refuses the edit with "Change RECONCILIATION_CRON instead", and the setting is checked at startup. "Run now" stays, because running once doesn't change the schedule.
 
+**Did you ever see the 2-day window matter?**
+Yes, by accident. The follow-up's manual check ran two days after the test payment it used, so reconciliation listed nothing and couldn't restore the deleted row. It was a useful reminder that the window is a real edge, not a theoretical one. The fix for that run was to queue the same repair job by hand from the dashboard; the longer-term fix would be a window option on the job for one-off catch-ups.
+

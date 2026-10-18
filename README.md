@@ -143,7 +143,8 @@ The brief asks this directly. The answer is four independent layers, each enforc
 | All 5 attempts fail | Event marked `FAILED` with `attempts = 5` and the last error; the job waits in the dashboard's **Failed** list with a retry button |
 | A Stripe call fails | One warning line with the endpoint, event ID, HTTP status (or `no response`), error type and duration |
 | The customer closes the tab after paying | Nothing breaks: the webhook, not the browser, marks the order `PAID` |
-| A webhook never arrives, or a payment row is lost | The daily reconciliation compares the last 2 days of paid Stripe checkouts with the database and queues a repair for each missing payment |
+| A webhook never arrives, or a payment row is lost | The daily reconciliation compares the last 2 days of paid Stripe checkouts with the database and queues a repair for each missing payment; the payment's stuck events become `RECONCILED` and leave the dashboard's Failed list |
+| A paid checkout can't be repaired (e.g. its amount doesn't match the order) | Recorded once in `reconciliation_issues`; later runs skip it and log "N open reconciliation issue(s) need review" until `resolved_at` is set |
 
 ## Quick start
 
@@ -383,8 +384,8 @@ All settings come from environment variables (`.env` locally), validated at star
 ## Testing
 
 ```bash
-npm test            # 147 unit tests
-npm run test:e2e    # 87 end-to-end tests (needs `docker compose up -d`)
+npm test            # 156 unit tests
+npm run test:e2e    # 94 end-to-end tests (needs `docker compose up -d`)
 npm run lint
 npm run typecheck
 npm run build
@@ -435,9 +436,8 @@ Honest edges of the current version, each with its planned answer:
 
 - **One currency (USD), card payments only.** Multiple currencies are out of scope; Stripe's Adaptive Pricing is turned off. Payment methods that settle days later aren't handled by the webhook; reconciliation records them once Stripe reports the session paid, within its 2-day window.
 - **If PostgreSQL is still down on the 5th attempt**, the event can't be marked `FAILED` and stays `PENDING`; the failed job is visible in the dashboard, where it can be retried, and the next reconciliation records the payment.
-- **A repair fixes the payment, not the event history.** If reconciliation records a payment whose webhook event got stuck, that `stripe_events` row stays `PENDING` (or `FAILED`) and its job stays in the dashboard's Failed list.
-- **A paid session whose amount or currency doesn't match its order** is found missing on every run, and its repair fails permanently each time: one new failed job a day until someone looks. Rare with one currency and Adaptive Pricing off.
-- **Schedule changes belong in `RECONCILIATION_CRON`.** "Edit schedule" or "Remove scheduler" on the dashboard is undone at the next worker start, which re-registers the scheduler from the setting.
+- **Reconciliation issues are resolved in SQL.** Setting `resolved_at` on a row in `reconciliation_issues` makes the next run try that session again; there is no screen for it yet.
+- **The schedule is changed only in `RECONCILIATION_CRON`.** The dashboard refuses "Edit schedule" and "Remove scheduler" (403), because the worker re-registers the scheduler from the setting at every start.
 - **Reconciliation looks back 2 days.** A gap older than that (say, an outage over a long weekend plus a missed run) needs a manual look. It repairs payments, never creates orders: a paid session whose order is gone is counted and logged, not recreated.
 - **The dashboard login is HTTP Basic auth**: no logout, no lockout after wrong guesses, and outside localhost it must run behind HTTPS. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
 - **Amounts are 32-bit integers**: up to about $21 million per row, plenty for course sales.
