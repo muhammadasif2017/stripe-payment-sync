@@ -40,6 +40,7 @@ Run all five checks (unit, e2e, lint, typecheck, build) before every commit. CI 
 
 - Database tests use `createTestPrisma()` from `test/test-prisma.ts` and clean up only the rows they created, using IDs unique per run.
 - Each test must pass when run alone.
+- The dashboard locks an IP out after 10 failed logins per app instance. `test/admin.e2e-spec.ts` already sends about 7; put new tests with failing logins in their own file and app, like `test/admin-login-limit.e2e-spec.ts`.
 - Prove a new test can fail: break the code or the constraint (in `payments_test` only), watch it fail, restore it.
 
 ## Workflow

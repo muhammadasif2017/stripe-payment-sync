@@ -200,7 +200,7 @@ Then open <http://localhost:3000> to buy a course, and follow [Try it end to end
 Stop with `docker compose --profile app down`; add `-v` to delete the database and queue data too.
 
 > [!TIP]
-> The stack listens on `127.0.0.1` only. If ports `3000`, `5435` or `6380` are taken, set `APP_PORT`, `POSTGRES_PORT` or `REDIS_PORT` in `.env`.
+> The stack listens on `127.0.0.1` only. If ports `3000`, `5435` or `6380` are taken, set `APP_PORT`, `POSTGRES_PORT` or `REDIS_PORT` in `.env`. If you change `APP_PORT`, change the port in `APP_URL` and in `stripe listen --forward-to localhost:<port>/webhooks/stripe` to match, or payments stay `PENDING`.
 
 ## Quick start for development
 
