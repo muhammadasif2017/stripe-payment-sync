@@ -63,7 +63,7 @@
 - [x] README: Docker-only run section, CI badge, "Why a queue", diagram check against `PROJECT.md`, Compose settings, roadmap ticked, deployment note on HTTPS
 - [x] Fresh clone in a scratch folder, following only the README: `/health` 200, dashboard login, a card 4242 payment ends `PAID` through the containers; cleaned up afterwards
 - [x] `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md`
-- [ ] PR from `stage-8-ci-docker` to `main`, CI green
+- [x] PR from `stage-8-ci-docker` to `main`, CI green
 
 **Dependencies:** Tasks 1–3
 
@@ -72,5 +72,5 @@
 ## Checkpoint: Stage 8 complete
 - [ ] All five checks pass locally and in CI
 - [x] Stage 8 "Done when" from `PROJECT.md` met
-- [ ] Commit, push, open PR
+- [x] Commit, push, open PR
 - [ ] Human review and merge
