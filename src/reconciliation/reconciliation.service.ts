@@ -53,19 +53,27 @@ export class ReconciliationService {
     ];
     const paymentIntentIds = [...new Set(sessions.flatMap((s) => paymentIntentIdOf(s) ?? []))];
     // Two queries for the whole run, not one per session.
-    const [orders, payments] = await Promise.all([
+    const [orders, payments, openIssues, openIssuesTotal] = await Promise.all([
       this.prisma.order.findMany({ where: { id: { in: orderIds } }, select: { id: true } }),
       this.prisma.payment.findMany({
         where: { stripePaymentIntentId: { in: paymentIntentIds }, status: 'SUCCEEDED' },
         select: { stripePaymentIntentId: true },
       }),
+      this.prisma.reconciliationIssue.findMany({
+        where: { stripeCheckoutSessionId: { in: sessions.map((s) => s.id) }, resolvedAt: null },
+        select: { stripeCheckoutSessionId: true },
+      }),
+      this.prisma.reconciliationIssue.count({ where: { resolvedAt: null } }),
     ]);
 
-    const { missing, summary } = selectMissing(
+    const selection = selectMissing(
       sessions,
       new Set(orders.map((o) => o.id)),
       new Set(payments.map((p) => p.stripePaymentIntentId)),
+      new Set(openIssues.map((i) => i.stripeCheckoutSessionId)),
     );
+    const missing = selection.missing;
+    const summary: ReconciliationSummary = { ...selection.summary, openIssuesTotal };
 
     // The run's timestamp makes each job ID unique per run: a repair queued yesterday that is still
     // kept in Redis doesn't block today's. Repairs are idempotent, so a duplicate is harmless.
@@ -82,8 +90,14 @@ export class ReconciliationService {
     this.logger.log(
       `Reconciliation: checked ${summary.checked} completed sessions, ${summary.missing} missing and queued, ` +
         `${summary.alreadyRecorded} already recorded, skipped ${summary.notPaid} not paid, ` +
-        `${summary.noOrderId} without order ID, ${summary.unknownOrder} with unknown order`,
+        `${summary.noOrderId} without order ID, ${summary.unknownOrder} with unknown order, ` +
+        `${summary.openIssues} with an open issue`,
     );
+    if (openIssuesTotal > 0) {
+      this.logger.warn(
+        `${openIssuesTotal} open reconciliation issue(s) need review (table reconciliation_issues)`,
+      );
+    }
     for (const session of missing) {
       this.logger.warn(`Payment missing for Checkout Session ${session.id}; repair queued`);
     }

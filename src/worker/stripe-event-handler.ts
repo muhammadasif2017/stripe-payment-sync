@@ -88,7 +88,14 @@ export class StripeEventHandler {
         refunds: paymentIntent ? await this.listRefunds(paymentIntent.id, context) : undefined,
       };
     });
-    return this.apply(snapshot, `session ${sessionId}`);
+    try {
+      return await this.apply(snapshot, `session ${sessionId}`);
+    } catch (error) {
+      if (error instanceof PermanentProcessingError) {
+        error.orderId ??= snapshot.orderId;
+      }
+      throw error;
+    }
   }
 
   /**

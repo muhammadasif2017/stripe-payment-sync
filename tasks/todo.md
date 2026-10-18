@@ -27,15 +27,15 @@
 **Description:** Record permanent repair failures once; skip them in later runs; remind daily.
 
 **Acceptance criteria:**
-- [ ] Migration: `reconciliation_issues` (session ID unique, order ID, reason, first/last seen, resolved at)
-- [ ] Processor upserts an open issue on a permanent `reconcile-session` failure; a failure to save is logged, never replaces the original error
-- [ ] Reconciliation skips sessions with an open issue, counts them as `openIssues`, and logs a warning when there are any
-- [ ] A resolved issue (`resolved_at` set) is tried again; failing again reopens it
+- [x] Migration: `reconciliation_issues` (session ID unique, order ID, reason, first/last seen, resolved at)
+- [x] Processor upserts an open issue on a permanent `reconcile-session` failure; a failure to save is logged, never replaces the original error
+- [x] Reconciliation skips sessions with an open issue, counts them as `openIssues`, and logs a warning when there are any
+- [x] A resolved issue (`resolved_at` set) is tried again; failing again reopens it
 
 **Verification:**
-- [ ] Unit tests for the selection with open issues
-- [ ] e2e: an amount mismatch is recorded once; the next run skips it and reports it; resolving it lets it be retried
-- [ ] Prove a test can fail
+- [x] Unit tests for the selection with open issues
+- [x] e2e: an amount mismatch is recorded once; the next run skips it and reports it; resolving it lets it be retried
+- [x] Prove a test can fail
 
 **Dependencies:** None (shares the migration step with task 1)
 
@@ -44,7 +44,7 @@
 **Estimated scope:** Medium
 
 ## Checkpoint: Data changes
-- [ ] Tasks 1–2 verified, all five checks pass, commit
+- [x] Tasks 1–2 verified, all five checks pass, commit
 
 ## Task 3: Schedule changes only through the setting
 

@@ -68,6 +68,7 @@ describe('Stripe events worker (e2e)', () => {
   });
 
   afterAll(async () => {
+    await prisma?.reconciliationIssue.deleteMany({ where: { orderId: { in: orderIds } } });
     await prisma?.payment.deleteMany({ where: { orderId: { in: orderIds } } });
     await prisma?.order.deleteMany({ where: { id: { in: orderIds } } });
     await prisma?.stripeEvent.deleteMany({ where: { id: { in: eventIds } } });
@@ -353,6 +354,32 @@ describe('Stripe events worker (e2e)', () => {
 
     expect(await job.getState()).toBe('completed');
     expect(retrievePaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it('records a repair that can never succeed as one open issue, updated on the next failure', async () => {
+    const { orderId, sessionId } = await missingPayment();
+    sessions.set(sessionId, { ...sessions.get(sessionId)!, amount_total: 9900 });
+
+    await settled((await enqueueRepair(sessionId)).id!);
+    const first = await prisma.reconciliationIssue.findUniqueOrThrow({
+      where: { stripeCheckoutSessionId: sessionId },
+    });
+    await prisma.reconciliationIssue.update({
+      where: { id: first.id },
+      data: { resolvedAt: new Date() },
+    });
+    const job = await enqueueRepair(sessionId);
+    const done = await settled(job.id!);
+
+    expect(await done.getState()).toBe('failed');
+    expect(done.attemptsMade).toBe(1);
+    const issues = await prisma.reconciliationIssue.findMany({
+      where: { stripeCheckoutSessionId: sessionId },
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ orderId, resolvedAt: null, firstSeenAt: first.firstSeenAt });
+    expect(issues[0].reason).toContain('9900');
+    expect(issues[0].lastSeenAt.getTime()).toBeGreaterThanOrEqual(first.lastSeenAt.getTime());
   });
 
   it('a reconcile-session job that fails once is retried and completes', async () => {

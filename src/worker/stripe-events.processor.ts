@@ -109,9 +109,33 @@ export class StripeEventsProcessor extends WorkerHost {
         `Repair of Checkout Session ${sessionId} failed on attempt ${attempt}${final ? ' (giving up)' : ', will retry'}: ${message}`,
       );
       if (permanent) {
+        await this.recordIssue(sessionId, error);
         throw new UnrecoverableError(error.message);
       }
       throw error;
+    }
+  }
+
+  /**
+   * Records a repair that can't succeed as one open reconciliation issue, so later runs skip the
+   * session instead of failing it again every day. A repeat failure updates the same row (and reopens
+   * it if someone had resolved it). A failure to save is logged and never replaces the original error.
+   */
+  private async recordIssue(sessionId: string, error: PermanentProcessingError): Promise<void> {
+    const reason = error.message.slice(0, MAX_ERROR_LENGTH);
+    try {
+      await this.prisma.reconciliationIssue.upsert({
+        where: { stripeCheckoutSessionId: sessionId },
+        create: { stripeCheckoutSessionId: sessionId, orderId: error.orderId, reason },
+        update: { orderId: error.orderId, reason, lastSeenAt: new Date(), resolvedAt: null },
+      });
+      this.logger.warn(
+        `Recorded reconciliation issue for Checkout Session ${sessionId}: ${reason}`,
+      );
+    } catch (saveError) {
+      this.logger.error(
+        `Could not record the reconciliation issue for ${sessionId}: ${saveError instanceof Error ? saveError.message : String(saveError)}`,
+      );
     }
   }
 

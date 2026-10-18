@@ -7,6 +7,9 @@ import type { OrderStatus, PaymentStatus, RefundStatus } from '../generated/pris
  */
 export class PermanentProcessingError extends Error {
   override readonly name = 'PermanentProcessingError';
+
+  /** The order involved, when known; saved on a reconciliation issue so a person can find it. */
+  orderId?: string;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

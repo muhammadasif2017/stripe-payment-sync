@@ -256,3 +256,6 @@ In the same transaction, the repair marks the payment's unsettled events `RECONC
 **Why a partial index?**
 The repair looks for unsettled events of one payment. Nearly every row in `stripe_events` is `PROCESSED`, so a normal index on `status` would be large and mostly useless. A partial index (`WHERE status <> 'PROCESSED'`) holds only the handful of open rows, stays tiny as the table grows, and lets PostgreSQL skip the whole processed history before it reads any JSON.
 
+**What happens to a payment that can never be repaired?**
+For example, a paid session whose amount doesn't match its order. Before, it was found missing every day and its repair failed every day: one more failed job per day, forever. Now the first permanent failure writes one row in `reconciliation_issues` with the reason. Later runs skip that session, count it, and log a daily "N open issues need review". Once someone fixes the data and sets `resolved_at`, the next run tries again, and a new failure reopens the same row. A problem becomes a to-do item instead of noise.
+
