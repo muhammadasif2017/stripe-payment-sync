@@ -363,3 +363,22 @@ An independent review (read-only, no shared context) checked the repository befo
 - **`APP_PORT`** was used by Compose but missing from `.env.example`; added, commented out, with the note that `APP_URL` and the `stripe listen` port must match.
 - **Kept on purpose:** the AI-assistant files (`CLAUDE.md`, `.claude/`), which leak nothing; commit author emails and earlier file versions, which stay in history (GitHub keeps every pull request's commits, so rewriting history wouldn't remove them).
 - **Not changed (only relevant if deployed publicly):** no rate limit on `POST /checkout`, no `helmet` security headers, Docker images pinned by tag rather than digest.
+
+### After going public
+
+- **Visibility:** the repository was made public after PR #14 merged. GitHub detects the MIT license.
+- **Protecting `main`:** before going public, branch protection wasn't available (GitHub's free plan only allows it on public repositories). Afterwards, a ruleset "Protect main" was added:
+  - changes go through a pull request (0 approvals, so the owner can merge their own);
+  - the `checks` and `docker` CI jobs must pass;
+  - force-pushes and deleting the branch are blocked.
+
+  Merged branches are deleted automatically (`delete_branch_on_merge`). Old stage branches were deleted after confirming each was fully merged into `main`.
+- **Actions on a public repository:** a first-time contributor's pull request waits for approval before CI runs (GitHub's default). The workflow token is read-only and can't approve pull requests. The workflow uses no secrets.
+- **About section:** a description of what the system does, 14 topics (`nestjs`, `stripe`, `stripe-webhooks`, `webhooks`, `bullmq`, `prisma`, `postgresql`, `redis`, `typescript`, `docker`, `github-actions`, `payments`, `idempotency`, `reconciliation`), and the unused Projects tab turned off. No website, because nothing is deployed.
+- **Release `v1.0.0`** ("all eight stages complete"), tagged on `main`, with a summary of each feature.
+- **How the project is labelled (PRs #15 and #16).** The README's first note opened with "Sample project" and called the brief "realistic", while `PROJECT.md` calls it fictional.
+  - PR #15 first aligned the wording ("fictional but realistic").
+  - Leading the page with "Sample project" read like a disclaimer, so the label was moved, not dropped. Dropping it entirely was considered and rejected: without a label, a reader would assume client work, and finding out later would cost trust.
+  - The top note now only says Stripe runs in test mode. A short "About this project" section before the license says it is a portfolio project built from a fictional client brief and wasn't delivered to a client.
+  - The About description ends with "· portfolio project", and the release notes say "Portfolio project; Stripe test mode only".
+- **Commit email:** future commits use the GitHub noreply address (`git config --global user.email`). Earlier commits keep the previous address, because GitHub keeps every pull request's commits.
