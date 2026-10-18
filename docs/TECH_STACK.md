@@ -73,6 +73,14 @@ The dashboard login. The browser shows its own login box when the server answers
 
 The daily reconciliation is a BullMQ job scheduler, not `@nestjs/schedule` (an in-process timer). The schedule is stored in Redis: with several worker processes only one runs each day's job, a run is not lost to a restart, and the scheduler and its runs show in Bull Board, which has a **Run now** button. No new library: it is part of BullMQ. `cron-parser` is the library BullMQ uses to read cron patterns; it is installed directly, at the same version, so `RECONCILIATION_CRON` is checked at startup with exactly the rules BullMQ will apply.
 
+## `express-rate-limit` 8.7.0
+
+The standard rate limiter for Express. It limits failed dashboard logins to 10 per 15 minutes per IP, counting only 401 responses. It needs no store for one API process; with several, its Redis store would share the counts. Pinned exactly, like the other packages that guard access.
+
+## Docker (multi-stage) and Docker Compose profiles
+
+One image runs as the API or the worker (`WORKER_ENABLED`), so both always run the same code. A multi-stage build compiles with all dependencies and ships only production ones: no TypeScript, no Prisma CLI, no test tools in the running container, which makes it smaller and gives an attacker less to work with. A separate `migrate` target applies migrations once before the app starts. A Compose profile (`app`) keeps `docker compose up -d` meaning "databases for development", while `docker compose --profile app up --build` starts everything.
+
 ## Claude Code hooks
 
 The AI coding assistant reads `CLAUDE.md` at the start of each session, but those rules are only advice. A hook is a script the tool runs at fixed points, here before every shell command, and it can block the command. `.claude/hooks/commit-guard.mjs` is plain Node.js with no dependencies, so it runs the same in Git Bash and PowerShell. It only affects the assistant; commits typed by a person go straight to git.

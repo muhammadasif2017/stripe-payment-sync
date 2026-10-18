@@ -1,6 +1,8 @@
-# Local infrastructure for development: PostgreSQL and Redis.
-# The API runs on the host with `npm run start:dev` for now; its container is added in a later stage.
 # Values come from .env (copy .env.example first).
+#
+# `docker compose up -d`                    PostgreSQL and Redis only, for `npm run start:dev`.
+# `docker compose --profile app up --build` the whole stack: migrations, then the API and the worker
+#                                           as separate containers from the same image.
 
 services:
   postgres:
@@ -35,6 +37,59 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # Applies Prisma migrations once, then exits; the API and the worker wait for it to succeed.
+  migrate:
+    profiles: [app]
+    build:
+      context: .
+      target: migrate
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Receives webhooks and serves checkout and the dashboard. No worker: a backlog never slows it.
+  api:
+    profiles: [app]
+    build:
+      context: .
+      target: runtime
+    image: stripe-payment-sync:local
+    restart: unless-stopped
+    # Forwards SIGTERM to Node, so the shutdown hooks close the database pool and Redis cleanly.
+    init: true
+    env_file: .env
+    environment: &app-environment
+      # Service names, not localhost: these override the host URLs in .env.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      PORT: '3000'
+      WORKER_ENABLED: 'false'
+    ports:
+      - '127.0.0.1:${APP_PORT:-3000}:3000'
+    depends_on: &app-depends-on
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # Processes Stripe events, repairs and the daily reconciliation. No published port.
+  worker:
+    profiles: [app]
+    # Same build and tag as the API: one image, built once (the second build is a cache hit).
+    build:
+      context: .
+      target: runtime
+    image: stripe-payment-sync:local
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      <<: *app-environment
+      WORKER_ENABLED: 'true'
+    depends_on: *app-depends-on
 
 volumes:
   postgres-data:

@@ -1,81 +1,76 @@
-# Stage 7 Follow-up – Closing Reconciliation's Known Limits: Tasks
+# Stage 8 – Tests, CI and Docker: Tasks
 
-## Task 1: Repairs resolve the events they cover
+## Task 1: Docker image, Compose services, dependency audit
 
-**Description:** Settle the stuck events of a repaired payment in the repair's transaction; clear their failed jobs.
+**Description:** A multi-stage Dockerfile and an `app` Compose profile that runs migrations, the API and the worker; fix the stage 1 `postinstall` problem; apply the non-breaking audit fix.
 
 **Acceptance criteria:**
-- [x] Migration: `RECONCILED` added to `stripe_event_status`; hand-written partial index on `stripe_events (status) WHERE status <> 'PROCESSED'`
-- [x] Repair transaction sets `RECONCILED` on `PENDING` / `FAILED` events whose `data.object.id` is the session or payment intent, or whose `data.object.payment_intent` is the payment intent; `last_error` and `attempts` kept
-- [x] After commit, each settled event's failed job is removed (decision 1); a failure to remove is logged, not thrown
-- [x] Processor skips `RECONCILED` events like `PROCESSED` ones
+- [x] `Dockerfile` (build, runtime, migrate) on `node:22.15.0-alpine`; runtime uses `npm ci --omit=dev --omit=optional --ignore-scripts`, runs as `node`, has a `/health` healthcheck, contains `dist/` and `public/` (migrations run from the `migrate` target)
+- [x] `.dockerignore` keeps `.env`, `node_modules`, `dist`, `.git` and local folders out
+- [x] Compose `app` profile: `migrate` (once), `api` (`WORKER_ENABLED=false`, `127.0.0.1:3000`), `worker`; URLs point at service names; `init: true`; `docker compose up -d` unchanged
+- [x] `npm audit fix` (no `--force`) tried; reverted because it split Prisma versions; remaining findings documented (none in the runtime image)
 
 **Verification:**
-- [x] e2e: a stuck `checkout.session.completed` event and a `FAILED` refund event of the same payment become `RECONCILED`; a `PROCESSED` event and another payment's event are untouched; the failed job is gone
-- [x] e2e: a repair that fails changes no event (transaction rolled back)
-- [x] Migrations apply cleanly to an empty throwaway database
-- [x] Prove a test can fail
+- [x] `docker compose --profile app up --build`: migrations applied, `/health` 200, `/` serves the checkout page, the dashboard answers 401 without a login, the worker logs the reconciliation schedule
+- [x] The image has no `.env` and the process runs as `node`
+- [x] `docker compose --profile app down` stops cleanly (SIGTERM handled)
 
 **Dependencies:** None
 
-**Files likely touched:** `prisma/schema.prisma`, `prisma/migrations/*`, `src/worker/stripe-event-handler.ts`, `src/worker/stripe-events.processor.ts`, tests
+**Files likely touched:** `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `package-lock.json`
 
 **Estimated scope:** Medium
 
-## Task 2: Unrepairable sessions become recorded issues
-
-**Description:** Record permanent repair failures once; skip them in later runs; remind daily.
+## Task 2: Dashboard login rate limit (decision 3)
 
 **Acceptance criteria:**
-- [x] Migration: `reconciliation_issues` (session ID unique, order ID, reason, first/last seen, resolved at)
-- [x] Processor upserts an open issue on a permanent `reconcile-session` failure; a failure to save is logged, never replaces the original error
-- [x] Reconciliation skips sessions with an open issue, counts them as `openIssues`, and logs a warning when there are any
-- [x] A resolved issue (`resolved_at` set) is tried again; failing again reopens it
+- [x] After 10 failed logins from one IP in 15 minutes, `/admin/queues` answers 429 until the window passes; successful logins don't count
+- [x] Limit applies only to the dashboard
 
 **Verification:**
-- [x] Unit tests for the selection with open issues
-- [x] e2e: an amount mismatch is recorded once; the next run skips it and reports it; resolving it lets it be retried
-- [x] Prove a test can fail
-
-**Dependencies:** None (shares the migration step with task 1)
-
-**Files likely touched:** `prisma/*`, `src/reconciliation/*`, `src/worker/stripe-events.processor.ts`, tests
-
-**Estimated scope:** Medium
-
-## Checkpoint: Data changes
-- [x] Tasks 1–2 verified, all five checks pass, commit
-
-## Task 3: Schedule changes only through the setting
-
-**Description:** The dashboard guard refuses Bull Board's edit-scheduler and remove-scheduler routes.
-
-**Acceptance criteria:**
-- [x] `PATCH .../job-schedulers/:id` and `PUT .../job-schedulers/:id/remove` get `403` with "Change RECONCILIATION_CRON instead"
-- [x] `PUT .../job-schedulers/:id/run` still allowed
-
-**Verification:**
-- [x] Unit tests for the route matching; e2e for the three routes with a real worker
-- [x] Prove a test can fail
+- [x] e2e: 10 wrong passwords, then the 11th request (even with the right password) gets 429; another route is unaffected
+- [x] Prove the test can fail
 
 **Dependencies:** None
 
-**Files likely touched:** `src/admin/*`, `test/reconciliation-schedule.e2e-spec.ts`
+**Files likely touched:** `src/admin/*`, `package.json`, `test/admin.e2e-spec.ts`
 
 **Estimated scope:** Small
 
-## Task 4: Manual check, docs and pull request
+## Checkpoint: Images and app
+- [x] Tasks 1–2 verified, all five checks pass, commit
+
+## Task 3: GitHub Actions workflow
 
 **Acceptance criteria:**
-- [x] Decision 2's check: the event becomes `RECONCILED`, the payment is back, the failed job is gone; Edit and Remove scheduler refused against the running app
-- [x] `README.md` known limits, `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md`
-- [x] PR from `stage-7-followup-limits` to `main`
+- [x] `.github/workflows/ci.yml` on push and pull request; actions pinned to SHAs; `permissions: contents: read`; concurrency group
+- [x] Job `checks`: PostgreSQL 17 and Redis 7 services; `npm ci`, lint, typecheck, unit, build, e2e, `npm audit --omit=dev --audit-level=high`
+- [x] Job `docker`: builds the image and starts the `app` profile with dummy settings; waits for `/health` 200
+
+**Verification:**
+- [x] Both jobs green on the pushed branch
+- [x] A deliberately failing unit test makes the run red (on a throwaway commit, then reverted)
+
+**Dependencies:** Task 1
+
+**Files likely touched:** `.github/workflows/ci.yml`
+
+**Estimated scope:** Small to medium
+
+## Task 4: README, fresh-clone check, docs and pull request
+
+**Acceptance criteria:**
+- [x] README: Docker-only run section, CI badge, "Why a queue", diagram check against `PROJECT.md`, Compose settings, roadmap ticked, deployment note on HTTPS
+- [x] Fresh clone in a scratch folder, following only the README: `/health` 200, dashboard login, a card 4242 payment ends `PAID` through the containers; cleaned up afterwards
+- [x] `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md`
+- [x] PR from `stage-8-ci-docker` to `main`, CI green
 
 **Dependencies:** Tasks 1–3
 
-**Estimated scope:** Small
+**Estimated scope:** Medium
 
-## Checkpoint: Complete
-- [x] All five checks pass
+## Checkpoint: Stage 8 complete
+- [ ] All five checks pass locally and in CI
+- [x] Stage 8 "Done when" from `PROJECT.md` met
 - [x] Commit, push, open PR
-- [ ] Human review and merge before stage 8
+- [ ] Human review and merge

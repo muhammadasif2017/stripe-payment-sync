@@ -265,3 +265,23 @@ Because it would lie. The worker registers the scheduler from `RECONCILIATION_CR
 **Did you ever see the 2-day window matter?**
 Yes, by accident. The follow-up's manual check ran two days after the test payment it used, so reconciliation listed nothing and couldn't restore the deleted row. It was a useful reminder that the window is a real edge, not a theoretical one. The fix for that run was to queue the same repair job by hand from the dashboard; the longer-term fix would be a window option on the job for one-off catch-ups.
 
+## Stage 8: Tests, CI and Docker
+
+**What stops someone guessing the dashboard password?**
+A 16-character minimum, and a rate limit: after 10 failed logins from one IP in 15 minutes, the dashboard answers 429 to that IP, even with the right password, until the window passes. Only failed logins count, so real use is never limited. The limit sits first in the middleware chain, so a locked-out client doesn't even reach the password check. The counts are in memory, which is fine for one API process; with several you would move them to Redis.
+
+**Why does the production image install with `--omit=dev --omit=optional`?**
+`@prisma/client` lists the Prisma CLI as an optional peer, so npm marks the CLI "devOptional" and `--omit=dev` alone keeps it. That would ship a migration tool and its dependencies, including 4 known vulnerabilities, in every container. Omitting optional packages too drops it, and the image's dependencies shrank from 444 MB to 190 MB. It was found by looking inside the built image, not by trusting the flag.
+
+**What does CI check?**
+Every push and pull request runs the same five checks as a developer (lint, type check, unit tests, build, e2e tests) against real PostgreSQL and Redis containers, plus an audit of the dependencies that actually ship. A second job builds the Docker image, starts the whole stack (migrations, API, worker) and checks that it answers. It needs no secrets: tests use dummy Stripe values and never call Stripe. Third-party actions are pinned to commit SHAs, because a version tag can be moved to different code.
+
+**How do you know the CI would catch a broken test?**
+By breaking one on purpose: a throwaway branch changed one expected value, CI went red at the unit test step and skipped the Docker job, and the branch was deleted.
+
+**How do you know someone new can run it?**
+By doing it: a fresh clone into an empty folder, following only the README's Docker section, with nothing from the development setup but the Stripe test key. The stack built, migrated itself and answered; a test payment made through the containers ended `PAID`. Two things only that test could show: Compose names projects after their folder (so a second copy with the same folder name would take over the first one's containers), and a clone made before the README was pushed tests the wrong README.
+
+**Why does the image pin npm?**
+The lockfile was written by npm 11; the Node 22.15 image ships npm 10, which resolves one optional peer dependency differently and refuses the lockfile with "Missing: typescript@5.9.3". Pinning npm 11.14.0 in the Dockerfile, in CI and in `packageManager` makes every install use the same resolver.
+

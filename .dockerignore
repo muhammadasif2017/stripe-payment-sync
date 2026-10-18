@@ -1,0 +1,20 @@
+# Keep secrets, local builds and tooling out of the image and the build context.
+.env
+.env.*
+!.env.example
+node_modules
+dist
+coverage
+*.tsbuildinfo
+.git
+.github
+.claude
+.agents
+.windsurf
+.playwright-mcp
+skills-lock.json
+src/generated
+tasks
+docs
+test
+*.md

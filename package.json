@@ -6,6 +6,10 @@
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
+  "packageManager": "npm@11.14.0",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "postinstall": "prisma generate",
     "build": "nest build",
@@ -39,6 +43,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "cron-parser": "5.10.1",
+    "express-rate-limit": "8.7.0",
     "ioredis": "6.0.0",
     "joi": "^18.2.9",
     "pg": "^8.23.1",

@@ -3,9 +3,12 @@
 // Naming: camelCase in TypeScript, snake_case in PostgreSQL (@map / @@map).
 
 generator client {
-  provider     = "prisma-client"
-  output       = "../src/generated/prisma"
-  moduleFormat = "esm"
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  // Explicit, not inferred from tsconfig.json: the Docker build generates the client before
+  // tsconfig.json is copied in, and the inferred default (".ts") breaks the compiled imports.
+  importFileExtension = "js"
 }
 
 datasource db {
