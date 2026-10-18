@@ -78,7 +78,7 @@ job "docker" (needs: checks)
 1. **Compose: an `app` profile? (recommended: yes)** `docker compose up -d` keeps meaning "databases for development", so the API on port 3000 never clashes with `npm run start:dev`. The full stack is `docker compose --profile app up --build`: one line in the README. The alternative is starting everything by default, with development using `docker compose up -d postgres redis`.
 2. **Pin GitHub Actions to commit SHAs? (recommended: yes)** This protects against a moved tag. The cost is updating the SHA by hand when upgrading.
 3. **Rate-limit dashboard logins? (recommended: yes)** At most 10 failed Basic auth attempts per 15 minutes per IP, then 429. It's small (`express-rate-limit`, one middleware, tests) and was promised for this stage. HTTPS stays a README note: the stack only listens on `127.0.0.1`, and a production proxy depends on where it's deployed.
-4. **Your repository is private.** GitHub Actions works there (free minutes apply). The CI badge only shows to people with access. The Fiverr portfolio will need the repository public eventually. That's your call, and nothing in this stage depends on it.
+4. **Your repository is private.** GitHub Actions works there (free minutes apply). The CI badge only shows to people with access. Publishing it as a portfolio piece needs the repository public eventually. That's your call, and nothing in this stage depends on it.
 
 ## The "Done when" check
 
