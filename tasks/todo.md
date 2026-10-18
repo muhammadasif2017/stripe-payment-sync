@@ -69,7 +69,7 @@
 **Acceptance criteria:**
 - [x] Decision 2's check: the event becomes `RECONCILED`, the payment is back, the failed job is gone; Edit and Remove scheduler refused against the running app
 - [x] `README.md` known limits, `CLAUDE.md`, `docs/BUILD_LOG.md`, `docs/TECH_STACK.md`, `docs/INTERVIEW_PREP.md`
-- [ ] PR from `stage-7-followup-limits` to `main`
+- [x] PR from `stage-7-followup-limits` to `main`
 
 **Dependencies:** Tasks 1–3
 
@@ -77,5 +77,5 @@
 
 ## Checkpoint: Complete
 - [x] All five checks pass
-- [ ] Commit, push, open PR
+- [x] Commit, push, open PR
 - [ ] Human review and merge before stage 8
