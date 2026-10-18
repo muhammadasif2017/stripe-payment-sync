@@ -43,13 +43,13 @@
 ## Task 3: GitHub Actions workflow
 
 **Acceptance criteria:**
-- [ ] `.github/workflows/ci.yml` on push and pull request; actions pinned to SHAs; `permissions: contents: read`; concurrency group
-- [ ] Job `checks`: PostgreSQL 17 and Redis 7 services; `npm ci`, lint, typecheck, unit, build, e2e, `npm audit --omit=dev --audit-level=high`
-- [ ] Job `docker`: builds the image and starts the `app` profile with dummy settings; waits for `/health` 200
+- [x] `.github/workflows/ci.yml` on push and pull request; actions pinned to SHAs; `permissions: contents: read`; concurrency group
+- [x] Job `checks`: PostgreSQL 17 and Redis 7 services; `npm ci`, lint, typecheck, unit, build, e2e, `npm audit --omit=dev --audit-level=high`
+- [x] Job `docker`: builds the image and starts the `app` profile with dummy settings; waits for `/health` 200
 
 **Verification:**
-- [ ] Both jobs green on the pushed branch
-- [ ] A deliberately failing unit test makes the run red (on a throwaway commit, then reverted)
+- [x] Both jobs green on the pushed branch
+- [x] A deliberately failing unit test makes the run red (on a throwaway commit, then reverted)
 
 **Dependencies:** Task 1
 

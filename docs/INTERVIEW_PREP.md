@@ -273,3 +273,9 @@ A 16-character minimum, and a rate limit: after 10 failed logins from one IP in 
 **Why does the production image install with `--omit=dev --omit=optional`?**
 `@prisma/client` lists the Prisma CLI as an optional peer, so npm marks the CLI "devOptional" and `--omit=dev` alone keeps it. That would ship a migration tool and its dependencies, including 4 known vulnerabilities, in every container. Omitting optional packages too drops it, and the image's dependencies shrank from 444 MB to 190 MB. It was found by looking inside the built image, not by trusting the flag.
 
+**What does CI check?**
+Every push and pull request runs the same five checks as a developer (lint, type check, unit tests, build, e2e tests) against real PostgreSQL and Redis containers, plus an audit of the dependencies that actually ship. A second job builds the Docker image, starts the whole stack (migrations, API, worker) and checks that it answers. It needs no secrets: tests use dummy Stripe values and never call Stripe. Third-party actions are pinned to commit SHAs, because a version tag can be moved to different code.
+
+**How do you know the CI would catch a broken test?**
+By breaking one on purpose: a throwaway branch changed one expected value, CI went red at the unit test step and skipped the Docker job, and the branch was deleted.
+
