@@ -279,3 +279,9 @@ Every push and pull request runs the same five checks as a developer (lint, type
 **How do you know the CI would catch a broken test?**
 By breaking one on purpose: a throwaway branch changed one expected value, CI went red at the unit test step and skipped the Docker job, and the branch was deleted.
 
+**How do you know someone new can run it?**
+By doing it: a fresh clone into an empty folder, following only the README's Docker section, with nothing from the development setup but the Stripe test key. The stack built, migrated itself and answered; a test payment made through the containers ended `PAID`. Two things only that test could show: Compose names projects after their folder (so a second copy with the same folder name would take over the first one's containers), and a clone made before the README was pushed tests the wrong README.
+
+**Why does the image pin npm?**
+The lockfile was written by npm 11; the Node 22.15 image ships npm 10, which resolves one optional peer dependency differently and refuses the lockfile with "Missing: typescript@5.9.3". Pinning npm 11.14.0 in the Dockerfile, in CI and in `packageManager` makes every install use the same resolver.
+

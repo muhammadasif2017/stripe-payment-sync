@@ -23,7 +23,7 @@ NestJS 12 (ES modules), TypeScript strict, Prisma 7.10.0 with `@prisma/adapter-p
 - Lint / types / build: `npm run lint`, `npm run typecheck`, `npm run build`
 - New migration after a schema change: `npm run db:migrate` (Prisma 7 does not regenerate the client on its own)
 
-Run all five checks (unit, e2e, lint, typecheck, build) before every commit. A hook (`.claude/hooks/commit-guard.mjs`, set up in `.claude/settings.json`) blocks `git commit` when lint, typecheck or unit tests fail, when the message mentions the assistant, or when a `.env` file is included. Run e2e and build yourself.
+Run all five checks (unit, e2e, lint, typecheck, build) before every commit. CI (`.github/workflows/ci.yml`) runs them on every push and pull request, plus a production dependency audit and a Docker smoke test. A hook (`.claude/hooks/commit-guard.mjs`, set up in `.claude/settings.json`) blocks `git commit` when lint, typecheck or unit tests fail, when the message mentions the assistant, or when a `.env` file is included. Run e2e and build yourself.
 
 ## Code conventions
 
