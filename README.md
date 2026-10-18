@@ -4,6 +4,7 @@
 
 **Every Stripe payment, failure and refund lands in your database exactly once, even when Stripe repeats itself, the database goes down, or the customer closes the tab.**
 
+[![CI](https://github.com/muhammadasif2017/stripe-payment-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/muhammadasif2017/stripe-payment-sync/actions/workflows/ci.yml)
 ![NestJS 12](https://img.shields.io/badge/NestJS-12-E0234E?logo=nestjs&logoColor=white)
 ![TypeScript strict](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)
@@ -22,10 +23,12 @@
 
 - [The problem](#the-problem)
 - [How it works](#how-it-works)
+- [Why a queue](#why-a-queue)
 - [What it guarantees](#what-it-guarantees)
 - [How a payment is never recorded twice](#how-a-payment-is-never-recorded-twice)
 - [When things go wrong](#when-things-go-wrong)
-- [Quick start](#quick-start)
+- [Run it with Docker](#run-it-with-docker)
+- [Quick start for development](#quick-start-for-development)
 - [Try it end to end](#try-it-end-to-end)
 - [API](#api)
 - [Data model](#data-model)
@@ -57,6 +60,7 @@ flowchart TB
         CO["POST /checkout<br/>PENDING order, server-side price"]
         WH["POST /webhooks/stripe<br/>verify · store · enqueue · answer 200"]
         W["Worker<br/>fetch latest · one transaction"]
+        RC["Daily reconciliation<br/>last 2 days of paid checkouts"]
     end
 
     PG[(PostgreSQL)]
@@ -72,11 +76,16 @@ flowchart TB
     R -- "5 · job, retried with backoff" --> W
     W -- "6 · latest session / payment / refunds" --> S
     W -- "7 · payment · refunds · order status" --> PG
+    RC -- "daily · list completed checkouts" --> S
+    RC -- "repair job for each missing payment" --> R
 ```
 
 1. **Checkout.** `POST /checkout` saves a `PENDING` order with the price from the server's catalog, then creates a Stripe Checkout Session carrying the order ID.
 2. **Webhook.** Stripe calls `POST /webhooks/stripe`. The endpoint checks the signature, stores the event, adds a queue job and answers `200` in milliseconds. It does no other work.
 3. **Worker.** A BullMQ worker picks up the job, fetches the **current** state of the payment from Stripe, and in **one database transaction** writes the payment, the refunds, the new order status and the event's `PROCESSED` mark.
+4. **Reconciliation.** Every day the worker lists Stripe's completed checkouts of the last 2 days and queues a repair for any paid one missing from the database: the safety net for a webhook that never arrived.
+
+The API and the worker are the same code, run as two processes (`WORKER_ENABLED`), and in Docker as two containers.
 
 <details>
 <summary><b>The same flow as a sequence diagram</b></summary>
@@ -108,6 +117,16 @@ sequenceDiagram
 ```
 
 </details>
+
+## Why a queue
+
+The webhook could do all the work itself: fetch the payment from Stripe, update the database, answer. It doesn't, for three reasons:
+
+- **Stripe wants a fast answer.** It waits a few seconds, then counts the delivery as failed and sends it again later. Work done inside the request (two Stripe calls, a transaction) makes timeouts and duplicate deliveries likely.
+- **Failures become retries, not lost payments.** If the database or Stripe is down, a webhook doing the work can only answer an error and hope Stripe retries. Here the event is already stored and its job sits in Redis; BullMQ retries it 5 times with backoff (10 s, 20 s, 40 s, 80 s), and every attempt's error is saved on the event.
+- **The two sides scale and fail separately.** A backlog of jobs never slows the webhook, the worker can restart without dropping anything, and either can be scaled on its own.
+
+The queue job carries only the event ID, and its job ID is that same ID, so a duplicate delivery can't create a second job.
 
 ## What it guarantees
 
@@ -146,9 +165,48 @@ The brief asks this directly. The answer is four independent layers, each enforc
 | A webhook never arrives, or a payment row is lost | The daily reconciliation compares the last 2 days of paid Stripe checkouts with the database and queues a repair for each missing payment; the payment's stuck events become `RECONCILED` and leave the dashboard's Failed list |
 | A paid checkout can't be repaired (e.g. its amount doesn't match the order) | Recorded once in `reconciliation_issues`; later runs skip it and log "N open reconciliation issue(s) need review" until `resolved_at` is set |
 
-## Quick start
+## Run it with Docker
 
-**You need:** Node.js 22.12+, Docker Desktop, a free [Stripe](https://dashboard.stripe.com/register) account in test mode, and the [Stripe CLI](https://docs.stripe.com/stripe-cli) for webhooks.
+**You need:** Docker Desktop, a free [Stripe](https://dashboard.stripe.com/register) account in test mode, and the [Stripe CLI](https://docs.stripe.com/stripe-cli) for webhooks. No Node.js needed.
+
+```bash
+# 1. Get the code
+git clone https://github.com/muhammadasif2017/stripe-payment-sync.git
+cd stripe-payment-sync
+
+# 2. Configure: copy the example, then fill in three values (see below)
+cp .env.example .env
+
+# 3. Build and start everything: migrations, then the API and the worker
+docker compose --profile app up --build -d
+
+# 4. Check it
+curl http://localhost:3000/health
+# {"status":"ok"}
+```
+
+The three values in `.env`:
+
+| Variable | Where it comes from |
+| --- | --- |
+| `STRIPE_SECRET_KEY` | Stripe dashboard, test mode: **Developers → API keys → Secret key** (`sk_test_…`) |
+| `STRIPE_WEBHOOK_SECRET` | `stripe listen --print-secret` (see [step 1 below](#1-forward-stripes-webhooks-to-your-machine)) |
+| `ADMIN_PASSWORD` | Any password of 16+ characters, for the dashboard |
+
+If you change `.env` later, apply it with `docker compose --profile app up -d --force-recreate api worker`.
+
+Then open <http://localhost:3000> to buy a course, and follow [Try it end to end](#try-it-end-to-end) from step 1. The dashboard is at <http://localhost:3000/admin/queues> (user `admin`). Logs: `docker compose --profile app logs -f api worker`.
+
+Stop with `docker compose --profile app down`; add `-v` to delete the database and queue data too.
+
+> [!TIP]
+> The stack listens on `127.0.0.1` only. If ports `3000`, `5435` or `6380` are taken, set `APP_PORT`, `POSTGRES_PORT` or `REDIS_PORT` in `.env`.
+
+## Quick start for development
+
+To run the app on your machine with hot reload, and the databases in Docker.
+
+**You need:** Node.js 22.12+ and npm 11 (`npm install -g npm@11.14.0`), Docker Desktop, a Stripe test account and the Stripe CLI.
 
 ```bash
 # 1. Install (also generates the Prisma client)
@@ -157,7 +215,7 @@ npm install
 # 2. Configure: then put your Stripe test key (sk_test_…) and a dashboard password (16+ characters) in .env
 cp .env.example .env
 
-# 3. Start PostgreSQL (localhost:5435) and Redis (localhost:6380)
+# 3. Start PostgreSQL (localhost:5435) and Redis (localhost:6380), without the app containers
 docker compose up -d
 
 # 4. Create the tables
@@ -376,6 +434,8 @@ All settings come from environment variables (`.env` locally), validated at star
 | `ADMIN_USERNAME` | `admin` | Dashboard login (default `admin`) |
 | `ADMIN_PASSWORD` | 16+ characters | Dashboard password; required, no default |
 | `RECONCILIATION_CRON` | `0 3 * * *` | When the daily reconciliation runs, as a 5-field cron pattern in UTC |
+| `APP_PORT` | `3000` | Docker only: host port for the API container |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`, `REDIS_PORT` | see `.env.example` | Docker Compose: database credentials and host ports. In the containers, the database and Redis URLs are built from these and point at the service names |
 | `TEST_DATABASE_URL` | `…/payments_test` | Database for e2e tests; must differ from `DATABASE_URL` |
 | `TEST_REDIS_URL` | `redis://localhost:6380/1` | Redis database for e2e tests; must differ from `REDIS_URL` |
 
@@ -385,7 +445,7 @@ All settings come from environment variables (`.env` locally), validated at star
 
 ```bash
 npm test            # 156 unit tests
-npm run test:e2e    # 94 end-to-end tests (needs `docker compose up -d`)
+npm run test:e2e    # 97 end-to-end tests (needs `docker compose up -d`)
 npm run lint
 npm run typecheck
 npm run build
@@ -393,6 +453,7 @@ npm run build
 
 - **Real infrastructure, isolated.** e2e tests run against their own PostgreSQL database (`payments_test`, created and migrated automatically) and their own Redis database. They refuse to start if pointed at the development database or a remote server.
 - **No network, no secrets.** Stripe is replaced by a fake client and webhook payloads are signed locally, so the suite runs offline and in CI.
+- **CI on every push and pull request** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the five checks against PostgreSQL and Redis services, an audit of the production dependencies, then the Docker image built and the whole stack started and checked.
 - **The key tests are proven to catch their bug.** Each was checked by breaking the code on purpose (dropping the job ID, skipping signature checks, an off-by-one in the retry count…) and watching it fail. The full list is in the [build log](docs/BUILD_LOG.md).
 - **Verified against real Stripe** at every stage since checkout: test payments with card 4242, `stripe trigger`, event redelivery, refunds, a live database outage, a failed job retried from the dashboard, and a deleted payment restored by reconciliation.
 
@@ -415,6 +476,9 @@ prisma/            schema and migrations (including hand-written CHECK constrain
 public/            minimal checkout, success and cancel pages
 test/              e2e tests and their helpers (isolated database, Redis, signing)
 docs/              build log, tech choices, interview questions
+Dockerfile         build, runtime and migrate images
+docker-compose.yml PostgreSQL and Redis; with --profile app, also migrate, api and worker
+.github/workflows/ CI
 ```
 
 ## Roadmap
@@ -428,7 +492,7 @@ The project is built in eight stages, each delivered as one reviewed pull reques
 - [x] **5. Worker with retries**: latest-object processing, one transaction, 5 attempts with backoff
 - [x] **6. Logging and dashboard**: every Stripe call logged; Bull Board behind a login to inspect and retry failed jobs
 - [x] **7. Daily reconciliation**: compare the last two days of Stripe checkouts with the database and repair anything missed
-- [ ] **8. CI and Docker**: GitHub Actions on every push; `docker compose up` starts API, worker, PostgreSQL and Redis
+- [x] **8. CI and Docker**: GitHub Actions on every push; `docker compose --profile app up` starts migrations, API, worker, PostgreSQL and Redis
 
 ## Known limits
 
@@ -439,7 +503,7 @@ Honest edges of the current version, each with its planned answer:
 - **Reconciliation issues are resolved in SQL.** Setting `resolved_at` on a row in `reconciliation_issues` makes the next run try that session again; there is no screen for it yet.
 - **The schedule is changed only in `RECONCILIATION_CRON`.** The dashboard refuses "Edit schedule" and "Remove scheduler" (403), because the worker re-registers the scheduler from the setting at every start.
 - **Reconciliation looks back 2 days.** A gap older than that (say, an outage over a long weekend plus a missed run) needs a manual look. It repairs payments, never creates orders: a paid session whose order is gone is counted and logged, not recreated.
-- **The dashboard login is HTTP Basic auth**: no logout, no lockout after wrong guesses, and outside localhost it must run behind HTTPS. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
+- **The dashboard login is HTTP Basic auth**: no logout, and outside localhost it must run behind HTTPS (a reverse proxy such as Caddy or nginx in front of the API). Failed logins are limited to 10 per 15 minutes per IP, counted in each API process's memory; behind a proxy, set Express's "trust proxy" so the limit sees client addresses. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
 - **Amounts are 32-bit integers**: up to about $21 million per row, plenty for course sales.
 
 ## Further reading
