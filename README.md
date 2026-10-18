@@ -16,7 +16,7 @@
 </div>
 
 > [!NOTE]
-> **Sample project.** Built against a fictional but realistic client brief ([`PROJECT.md`](PROJECT.md)) to show how I would solve it, not delivered to a client. Stripe runs in test mode only; no real money moves.
+> Stripe runs in test mode only; no real money moves. The requirements are in [`PROJECT.md`](PROJECT.md).
 
 ---
 
@@ -40,6 +40,7 @@
 - [Roadmap](#roadmap)
 - [Known limits](#known-limits)
 - [Further reading](#further-reading)
+- [About this project](#about-this-project)
 - [License](#license)
 
 ---
@@ -516,6 +517,10 @@ Honest edges of the current version, each with its planned answer:
 | [`docs/TECH_STACK.md`](docs/TECH_STACK.md) | Why each technology was chosen |
 | [`docs/INTERVIEW_PREP.md`](docs/INTERVIEW_PREP.md) | The questions a client or interviewer asks about this design, answered |
 | [`PROJECT.md`](PROJECT.md) | The original brief, acceptance criteria and build plan |
+
+## About this project
+
+Portfolio project, built from a fictional client brief ([`PROJECT.md`](PROJECT.md)) to show how I'd solve it. It wasn't delivered to a client.
 
 ## License
 
