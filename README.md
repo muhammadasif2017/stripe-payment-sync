@@ -16,7 +16,7 @@
 </div>
 
 > [!NOTE]
-> **Sample project.** Built against a fictional but realistic client brief ([`PROJECT.md`](PROJECT.md)) to show how I would solve it, not delivered to a client. Stripe runs in test mode only; no real money moves.
+> Stripe runs in test mode only; no real money moves. The requirements are in [`PROJECT.md`](PROJECT.md).
 
 ---
 
