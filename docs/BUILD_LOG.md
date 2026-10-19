@@ -427,3 +427,17 @@ A pre-release review of `main` ran three independent reviewers in parallel (code
 - **Proved first.** Four new unit cases (trailing slash and letter case, for edit and remove) failed on the old patterns. A new e2e test sends the same requests through the real app: on the old guard the trailing-slash edit got `204 No Content`, meaning it really changed the scheduler in the test Redis.
 - **The fix.** Both patterns accept an optional trailing slash and ignore case (`\/?$/i`). "Run now", with or without a trailing slash, is still allowed.
 - Also: rewrapped a JSDoc line over 100 characters from Task 3.
+
+### Task 5: Tests for checks nothing proved
+
+No code changes. The pre-release test review found checks that no test would notice being removed. Each new test was shown to fail by breaking the code it covers, then the code was restored.
+
+| Test | Broken on purpose | Result while broken |
+| --- | --- | --- |
+| A `payment_intent.canceled` event whose payment intent charges 9900 against a 4900 order fails permanently and saves nothing | Removed the payment intent's `checkMatchesOrder` call | `promise resolved "undefined" instead of rejecting`: the payment would have been saved |
+| Reconciliation repairs a paid session whose only payment row is a `FAILED` attempt (a declined card, then a success whose event was lost) | Dropped `status: 'SUCCEEDED'` from reconciliation's payment lookup | The session counted as already recorded, so it would never be repaired |
+| Stripe event jobs get 5 attempts, exponential backoff from 10 s, completed jobs kept 7 days, failed jobs kept; reconciliation runs get 3 attempts from 1 minute, kept 30 days | Set `attempts: 1` in both | Both tests failed |
+| The login limit applies only to the dashboard, also when the test runs alone | Mounted the limiter on every route | New test failed (`got 429 "Too Many Requests"` on `/health`); the old test still passed alone |
+
+- **Why the old queue test couldn't fail.** It compared the queue's options with the same constant that set them, so changing a number changed both sides. The new tests add a job and check the numbers themselves.
+- **Why the old login-limit test only worked in order.** It checked `/health` answered 200, which only means something once the IP is locked out, and only the test before it did that. The test now locks the IP out itself.

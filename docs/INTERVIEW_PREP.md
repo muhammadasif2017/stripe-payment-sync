@@ -317,3 +317,6 @@ Reading, checking and then writing leaves a gap where a repair can commit in bet
 
 **How was the dashboard's schedule guard bypassed, and how did you fix it?**
 It compared the URL with exact patterns, but the router behind it treats `/x` and `/x/` as the same route and ignores letter case. So `.../job-schedulers/daily-reconciliation/` slipped past the guard and still reached the handler. The patterns now allow both. The lesson: a path check in middleware must match the way the router matches, so I tested which variants the router actually accepts instead of guessing.
+
+**How do you know a test actually tests something?**
+Break the code it covers and watch it fail. In this project two old tests passed whatever the code did: one compared the queue's retry settings with the same constant that set them, and one only meant something after the previous test had run. Both were rewritten, and every new test in stage 9 was shown to fail on broken code before it counted.

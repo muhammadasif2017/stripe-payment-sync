@@ -611,6 +611,19 @@ describe('StripeEventHandler (e2e)', () => {
     expect(saved.payments).toHaveLength(0);
   });
 
+  it('fails permanently when a payment intent event charges a different amount than the order', async () => {
+    // A payment_intent.* event reads only the payment intent, so its own check is the only one.
+    const order = await newOrder();
+    const pi = paymentIntent(order.id, { amount: 9900, amount_received: 9900 });
+
+    await expect(
+      handler.handle(await storedEvent('payment_intent.canceled', { id: pi.id }), 1),
+    ).rejects.toThrow(/payment intent charges 9900 usd but order .* is 4900 usd/);
+    const saved = await orderWithRows(order.id);
+    expect(saved.status).toBe('PENDING');
+    expect(saved.payments).toHaveLength(0);
+  });
+
   it('fails permanently when Stripe says the object does not exist', async () => {
     stripeState.error = Object.assign(new Error('No such payment_intent'), {
       type: 'StripeInvalidRequestError',

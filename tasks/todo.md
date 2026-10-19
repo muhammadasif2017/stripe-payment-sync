@@ -65,14 +65,14 @@
 ## Task 5: Tests for checks nothing currently proves
 
 **Acceptance criteria:**
-- [ ] A `payment_intent.*` event with a mismatched PI amount fails permanently and saves nothing
-- [ ] Reconciliation repairs a paid session whose only payment row is `FAILED`
-- [ ] Queue retry settings asserted by value
-- [ ] Login-limit "only the dashboard" test passes when run alone
+- [x] A `payment_intent.*` event with a mismatched PI amount fails permanently and saves nothing
+- [x] Reconciliation repairs a paid session whose only payment row is `FAILED`
+- [x] Queue retry settings asserted by value
+- [x] Login-limit "only the dashboard" test passes when run alone
 
 **Verification:**
-- [ ] Each test fails when the code it covers is broken, then the code is restored
-- [ ] Docs updated
+- [x] Each test fails when the code it covers is broken, then the code is restored
+- [x] Docs updated
 
 **Files likely touched:** `test/stripe-event-handler.e2e-spec.ts`, `test/reconciliation.e2e-spec.ts`, `test/queue.e2e-spec.ts`, `test/admin-login-limit.e2e-spec.ts`
 
