@@ -1,30 +1,39 @@
 import { Logger } from '@nestjs/common';
-import type { NextFunction, Request, Response } from 'express';
-
-/**
- * Bull Board's routes that change or delete a job scheduler ("Edit schedule", "Remove scheduler").
- * "Run now" (`.../run`) is not matched and stays allowed. Bull Board's Express router is neither
- * strict nor case-sensitive, so a trailing slash and any letter case reach the same routes; the
- * patterns allow both.
- */
-const SCHEDULE_CHANGES: { method: string; path: RegExp }[] = [
-  { method: 'PATCH', path: /\/api\/queues\/[^/]+\/job-schedulers\/[^/]+\/?$/i },
-  { method: 'PUT', path: /\/api\/queues\/[^/]+\/job-schedulers\/[^/]+\/remove\/?$/i },
-];
+import { Router, type RequestHandler } from 'express';
+import { RECONCILIATION_QUEUE } from '../queue/queue.module.js';
 
 const logger = new Logger('ScheduleGuard');
 
-/**
- * Express middleware that refuses schedule changes made on the dashboard. The worker re-registers the
- * reconciliation scheduler from `RECONCILIATION_CRON` at every start, so an edit there would be undone
- * silently; the setting is the only place to change it.
- */
-export function rejectScheduleChanges(req: Request, res: Response, next: NextFunction): void {
-  const path = req.originalUrl.split('?')[0];
-  if (!SCHEDULE_CHANGES.some((route) => route.method === req.method && route.path.test(path))) {
-    next();
+/** Answers 403: the schedule is changed only through `RECONCILIATION_CRON`. */
+const refuse: RequestHandler = (req, res) => {
+  logger.warn(`Refused dashboard schedule change ${req.method} ${req.originalUrl} from ${req.ip}`);
+  res.status(403).json({ statusCode: 403, message: 'Change RECONCILIATION_CRON instead' });
+};
+
+/** Refuses only on the reconciliation queue; the same actions on other queues stay allowed. */
+const refuseOnReconciliation: RequestHandler = (req, res, next) => {
+  if (req.params.queueName === RECONCILIATION_QUEUE) {
+    refuse(req, res, next);
     return;
   }
-  logger.warn(`Refused dashboard schedule change ${req.method} ${path} from ${req.ip}`);
-  res.status(403).json({ statusCode: 403, message: 'Change RECONCILIATION_CRON instead' });
-}
+  next();
+};
+
+/**
+ * Express middleware that refuses schedule changes made on the dashboard. The worker re-registers the
+ * reconciliation scheduler from `RECONCILIATION_CRON` at every start, so a change there would be undone
+ * silently; the setting is the only place to change it.
+ *
+ * Refused: Bull Board's "Edit schedule" and "Remove scheduler" on any queue, and emptying or
+ * obliterating the reconciliation queue, which deletes its scheduler or the scheduler's next run.
+ * "Run now" (`.../run`) stays allowed.
+ *
+ * It is an Express `Router` with Bull Board's own route paths, not a check on the URL text: it runs
+ * just before Bull Board's router on the same request, so both read the path the same way (letter
+ * case, a trailing slash, a `#` fragment or a backslash). Unmatched requests pass through.
+ */
+export const rejectScheduleChanges: RequestHandler = Router()
+  .patch('/api/queues/:queueName/job-schedulers/:schedulerId', refuse)
+  .put('/api/queues/:queueName/job-schedulers/:schedulerId/remove', refuse)
+  .put('/api/queues/:queueName/empty', refuseOnReconciliation)
+  .put('/api/queues/:queueName/obliterate', refuseOnReconciliation);

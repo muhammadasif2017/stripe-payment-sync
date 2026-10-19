@@ -441,3 +441,25 @@ No code changes. The pre-release test review found checks that no test would not
 
 - **Why the old queue test couldn't fail.** It compared the queue's options with the same constant that set them, so changing a number changed both sides. The new tests add a job and check the numbers themselves.
 - **Why the old login-limit test only worked in order.** It checked `/health` answered 200, which only means something once the IP is locked out, and only the test before it did that. The test now locks the IP out itself.
+
+### Review follow-ups
+
+A second `/ship` review (code, security, tests) on this branch's diff approved the race fixes, and found two blockers and several smaller gaps. Each fix below was shown to fail first.
+
+**Blocker: the schedule guard could still be bypassed with `#` or `\`.**
+- The guard compared `req.originalUrl` (cut at `?`) with patterns. Express's router reads the path through `parseurl`, which, when the URL contains `#`, uses Node's `url.parse`: it drops everything from `#` and turns `\` into `/`. So `PUT .../daily-reconciliation/remove#` failed the guard's pattern but still reached Bull Board's remove handler. The security review proved it with requests over a raw socket (HTTP clients drop fragments before sending), and the same probe reproduced it here (200 from the handler).
+- Task 4's own check had only tried a trailing slash, letter case, percent-encoded letters and double slashes; it never tried `#`. Patching the patterns again would only invite the next variant.
+- **Fix:** the guard is now an Express `Router` with Bull Board's own route paths. It runs just before Bull Board's router on the same request, so the two can't read a path differently. It also refuses emptying or obliterating the `reconciliation` queue, which deletes the scheduler or its next run (the review found that too); the same actions on other queues stay allowed.
+- **Proof:** new unit cases (`#`, `\`, empty, obliterate) and an e2e test that sends the requests over a raw socket. Against the old guard, `remove#` got `204`, removed the scheduler in the test Redis, and the test after it failed; with the new guard all get 403.
+
+**Blocker: a test that could fail at random.** Repairs settle only events stored strictly before the read started, both times rounded to the millisecond. The test "marks the payment's unsettled events RECONCILED" stores events a few queries before the repair, so on a fast machine one could land in the same millisecond and stay `PENDING`. The handler tests now move stored events 1 s back (after the insert, because the trigger sets the time on insert only); the one event meant to arrive mid-repair keeps the database's time.
+
+**Tests the review found missing.** Each was shown to fail by changing the code:
+
+| Test | Code changed on purpose | Result |
+| --- | --- | --- |
+| The read's time comes from the database clock (app clock faked an hour ahead) | `databaseNow()` returning the app's `new Date()` | Failed |
+| A read starting in the same millisecond as the saved one counts as older and reads again | `<=` changed to `<` | Failed |
+| A read one millisecond later saves at once | — (pins the other side of the rule) | — |
+| A repair settles an event stored 1 ms before its read, not one stored in the same millisecond | `<` changed to `<=` | Failed |
+| The overtaken job reads Stripe exactly 3 times in total | — (the 5 ms sleep it had was removed: equal times already count as older) | — |

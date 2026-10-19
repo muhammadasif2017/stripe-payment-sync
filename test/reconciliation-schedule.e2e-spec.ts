@@ -3,6 +3,8 @@ import { Logger } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import type { Queue } from 'bullmq';
+import type { AddressInfo } from 'node:net';
+import { connect } from 'node:net';
 import request from 'supertest';
 import { AppModule } from './../src/app.module.js';
 import { APP_OPTIONS } from './../src/app.setup.js';
@@ -94,6 +96,69 @@ describe('Reconciliation schedule (e2e)', () => {
       .expect(403);
 
     expect((edit.body as { message: string }).message).toBe('Change RECONCILIATION_CRON instead');
+    expect(await queue.getJobSchedulers()).toEqual([
+      expect.objectContaining({ key: RECONCILIATION_SCHEDULER_ID, pattern: '0 3 * * *' }),
+    ]);
+  });
+
+  /**
+   * Sends one request over a raw socket and returns its status code. HTTP clients such as supertest
+   * drop a `#` fragment and fix backslashes before sending; a hand-written request doesn't.
+   */
+  async function rawStatus(method: string, path: string): Promise<number> {
+    const server = app.getHttpServer();
+    if (!server.listening) await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+    const { port } = server.address() as AddressInfo;
+    const auth = Buffer.from('admin:e2e-dashboard-password').toString('base64');
+    const response = await new Promise<string>((resolve, reject) => {
+      const socket = connect(port, '127.0.0.1', () => {
+        socket.write(
+          [
+            `${method} ${path} HTTP/1.1`,
+            'Host: localhost',
+            `Authorization: Basic ${auth}`,
+            'Sec-Fetch-Site: same-origin',
+            'Content-Type: application/json',
+            'Content-Length: 2',
+            'Connection: close',
+            '',
+            '{}',
+          ].join('\r\n'),
+        );
+      });
+      let data = '';
+      socket.on('data', (chunk) => (data += chunk));
+      socket.on('end', () => resolve(data));
+      socket.on('error', reject);
+    });
+    return Number(response.split(' ')[1]);
+  }
+
+  it('also refuses them with a # fragment or a backslash, which the router ignores or rewrites', async () => {
+    for (const [method, path] of [
+      ['PUT', `${schedulerRoute}/remove#`],
+      ['PUT', `${schedulerRoute}\\remove#`],
+      ['PATCH', `${schedulerRoute}/#`],
+      ['PUT', `http://localhost${schedulerRoute}/remove#x`],
+    ]) {
+      expect(await rawStatus(method, path), `${method} ${path}`).toBe(403);
+    }
+
+    expect(await queue.getJobSchedulers()).toEqual([
+      expect.objectContaining({ key: RECONCILIATION_SCHEDULER_ID, pattern: '0 3 * * *' }),
+    ]);
+  });
+
+  it('refuses emptying or obliterating the reconciliation queue, which would drop the schedule', async () => {
+    const server = app.getHttpServer();
+    for (const action of ['empty', 'obliterate']) {
+      await request(server)
+        .put(`/admin/queues/api/queues/${RECONCILIATION_QUEUE}/${action}`)
+        .auth('admin', 'e2e-dashboard-password')
+        .set('Sec-Fetch-Site', 'same-origin')
+        .expect(403);
+    }
+
     expect(await queue.getJobSchedulers()).toEqual([
       expect.objectContaining({ key: RECONCILIATION_SCHEDULER_ID, pattern: '0 3 * * *' }),
     ]);
