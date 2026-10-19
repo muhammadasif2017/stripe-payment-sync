@@ -33,6 +33,23 @@ describe('stripe_events table (e2e)', () => {
     expect(saved.receivedAt).toBeInstanceOf(Date);
   });
 
+  it("sets received_at from the database's clock, not the app's", async () => {
+    // Repairs compare received_at with the database's clock (StripeEventHandler), so the app's clock
+    // must not be the source. Move the app's clock to 2000: the stored time must ignore it.
+    const event = makeEvent('received-at');
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2000-01-01T00:00:00Z') });
+    try {
+      await prisma.stripeEvent.create({ data: event });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const [row] = await prisma.$queryRaw<{ drift: number }[]>`
+      SELECT abs(extract(epoch FROM now() - received_at)) AS drift
+      FROM stripe_events WHERE id = ${event.id}`;
+    expect(Number(row.drift)).toBeLessThan(60);
+  });
+
   it('rejects a second event with the same Stripe event ID (P2002) and keeps one row', async () => {
     // Inserts its own first copy, so this test doesn't depend on the one above.
     const event = makeEvent('duplicate');

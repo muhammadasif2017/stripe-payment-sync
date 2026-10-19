@@ -39,7 +39,9 @@ model StripeEvent {
   lastError       String?           @map("last_error")
   /// When Stripe created the event (event.created); events can arrive out of order.
   stripeCreatedAt DateTime          @map("stripe_created_at") @db.Timestamptz(3)
-  receivedAt      DateTime          @default(now()) @map("received_at") @db.Timestamptz(3)
+  /// Set by the database, not by Prisma (which fills `now()` from the app's clock): repairs compare
+  /// it with the database's clock to know which events their Stripe snapshot already covers.
+  receivedAt      DateTime          @default(dbgenerated("CURRENT_TIMESTAMP")) @map("received_at") @db.Timestamptz(3)
   processedAt     DateTime?         @map("processed_at") @db.Timestamptz(3)
 
   @@map("stripe_events")
