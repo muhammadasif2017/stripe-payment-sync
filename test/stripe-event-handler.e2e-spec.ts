@@ -23,7 +23,10 @@ describe('StripeEventHandler (e2e)', () => {
     /** Overrides the page size the handler asks for, to spread a few refunds over several pages. */
     refundPageSize?: number;
     refundPages: number;
-    /** Runs while the handler lists refunds, i.e. after its snapshot started and before it commits. */
+    /**
+     * Runs after a page of refunds is read and before the handler gets it: after the snapshot
+     * started reading Stripe and before it is saved.
+     */
     duringRefundsList?: () => Promise<void>;
   } = { sessions: {}, paymentIntents: {}, refunds: {}, refundPages: 0 };
 
@@ -54,14 +57,18 @@ describe('StripeEventHandler (e2e)', () => {
       // One page of refunds, the way Stripe paginates: `limit` items after `starting_after`.
       list: async (params: { payment_intent: string; limit: number; starting_after?: string }) => {
         fail();
-        await stripeState.duringRefundsList?.();
         stripeState.refundPages += 1;
         const all = stripeState.refunds[params.payment_intent] ?? [];
         const start = params.starting_after
           ? all.findIndex((r) => r.id === params.starting_after) + 1
           : 0;
         const limit = stripeState.refundPageSize ?? params.limit;
-        return { data: all.slice(start, start + limit), has_more: start + limit < all.length };
+        const page = {
+          data: all.slice(start, start + limit),
+          has_more: start + limit < all.length,
+        };
+        await stripeState.duringRefundsList?.();
+        return page;
       },
     },
   };
@@ -318,6 +325,97 @@ describe('StripeEventHandler (e2e)', () => {
     expect(
       lines.some((line) => line.startsWith(`paymentIntents.retrieve event=${event.id} `)),
     ).toBe(true);
+  });
+
+  describe('the newest read from Stripe wins', () => {
+    /** A paid order whose payment is recorded, with one full refund that Stripe reports as pending. */
+    async function paidOrderWithPendingRefund() {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id);
+      await handler.handle(
+        await storedEvent('checkout.session.completed', { id: session(order.id, pi.id!).id }),
+        1,
+      );
+      const refund: Partial<Stripe.Refund> = {
+        id: uid('re_test'),
+        amount: 4900,
+        currency: 'usd',
+        status: 'pending',
+        payment_intent: pi.id,
+      };
+      stripeState.refunds[pi.id!] = [refund];
+      return { order, pi, refund };
+    }
+
+    it('a job whose read was overtaken by a newer save reads Stripe again instead of saving old data', async () => {
+      const { order, pi, refund } = await paidOrderWithPendingRefund();
+      const chargeRefunded = await storedEvent('charge.refunded', {
+        id: uid('ch_test'),
+        payment_intent: pi.id,
+      });
+      const refundUpdated = await storedEvent('refund.updated', {
+        id: refund.id,
+        payment_intent: pi.id,
+      });
+      // charge.refunded has read the refund as pending. Before it saves, the refund succeeds and
+      // the refund.updated job reads and saves that.
+      stripeState.duringRefundsList = async () => {
+        stripeState.duringRefundsList = undefined;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        stripeState.refunds[pi.id!] = [{ ...refund, status: 'succeeded' }];
+        await handler.handle(refundUpdated, 1);
+      };
+
+      await handler.handle(chargeRefunded, 1);
+
+      const saved = await orderWithRows(order.id);
+      expect(saved.payments[0].refunds).toMatchObject([{ status: 'SUCCEEDED' }]);
+      expect(saved.status).toBe('REFUNDED');
+      const row = await prisma.stripeEvent.findUniqueOrThrow({ where: { id: chargeRefunded.id } });
+      expect(row.status).toBe('PROCESSED');
+    });
+
+    it('gives up after 3 reads that are all older than the saved one, as a retryable error', async () => {
+      const { order, pi } = await paidOrderWithPendingRefund();
+      // A save from the future: every read of this job is older.
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { syncedAt: new Date(Date.now() + 3_600_000) },
+      });
+      const event = await storedEvent('charge.refunded', {
+        id: uid('ch_test'),
+        payment_intent: pi.id,
+      });
+
+      const error = await handler.handle(event, 1).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(PermanentProcessingError);
+      expect((error as Error).message).toMatch(/older than the one saved .* after 3 reads/);
+      expect(stripeState.refundPages).toBe(3);
+      const saved = await orderWithRows(order.id);
+      expect(saved.payments[0].refunds).toHaveLength(0);
+      expect(saved.status).toBe('PAID');
+      expect((await prisma.stripeEvent.findUniqueOrThrow({ where: { id: event.id } })).status).toBe(
+        'PENDING',
+      );
+    });
+
+    it('applies to repairs too', async () => {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id);
+      const s = session(order.id, pi.id!);
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { syncedAt: new Date(Date.now() + 3_600_000) },
+      });
+
+      const error = await handler.reconcileSession(s.id!).catch((e: unknown) => e);
+
+      expect(error).not.toBeInstanceOf(PermanentProcessingError);
+      expect((error as Error).message).toMatch(/after 3 reads/);
+      expect((await orderWithRows(order.id)).payments).toHaveLength(0);
+    });
   });
 
   describe('reconcileSession (repairs from reconciliation)', () => {

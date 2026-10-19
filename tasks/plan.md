@@ -24,8 +24,9 @@ Stage 1–8 plans and tasks are archived in `tasks/archive/`.
 
 **The fix (decision 1).**
 - New column `orders.synced_at` (`Timestamptz(3)`, nullable): the `startedAt` of the last snapshot saved for the order. Task 1 already records `startedAt` (database time, before the first Stripe call) on every snapshot.
-- Under the order lock, a snapshot older than `synced_at` is not saved. The job reads Stripe again and tries once more, up to 3 reads; after that it fails with a retryable error and BullMQ retries it later.
-- A snapshot that is saved sets `synced_at` to its `startedAt`. Equal times are saved (the same instant, so neither is older).
+- Under the order lock, a snapshot not newer than `synced_at` is not saved (equal times count as older). The job reads Stripe again and tries once more, up to 3 reads; after that it fails with a retryable error and BullMQ retries it later.
+- A snapshot that is saved sets `synced_at` to its `startedAt`.
+- `received_at` is set by a `BEFORE INSERT` trigger rather than a `dbgenerated` default, which Prisma reports as a schema difference on every migration.
 - Repairs follow the same rule, because they write the same rows.
 
 **Why not "never move a status backwards"** (the first recommendation, dropped after checking Stripe's docs): it depends on a list of which status changes Stripe allows. The docs show the list is longer than assumed: a refund that needs the customer's bank details can go from `succeeded` back to `requires_action`. That can't happen with card payments, the only kind this project takes, but the rule would quietly break if another payment method were added. Comparing read times doesn't depend on Stripe's state machine at all.

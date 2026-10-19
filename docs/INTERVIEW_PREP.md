@@ -298,7 +298,16 @@ A repair reads Stripe first, then writes in a transaction, and in that transacti
 Because two clocks drift, and any drift reopens the race. Both times now come from PostgreSQL: the repair reads `now()`, and the event's `received_at` is the column default. The repair's time is rounded to milliseconds the same way as the column, so rounding can't make a later event look earlier.
 
 **What went wrong while fixing it?**
-I assumed the database set `received_at`, because the column has a default. A test failed once in about twenty runs. Logging Prisma's SQL showed Prisma Client sends its own value for `@default(now())`, from the app's clock, so the database default never ran. The fix was `@default(dbgenerated("CURRENT_TIMESTAMP"))`, so Prisma leaves the column out. To make the bug impossible to miss, a test moves the app's clock to the year 2000 and checks the stored time still matches the database. Lesson: a flaky test is a bug report; find the cause before rerunning.
+I assumed the database set `received_at`, because the column has a default. A test failed once in about twenty runs. Logging Prisma's SQL showed Prisma Client sends its own value for `@default(now())`, from the app's clock, so the database default never ran. The fix is a `BEFORE INSERT` trigger that sets `received_at = now()` whatever an insert sends. (A first fix, `@default(dbgenerated(...))`, worked but made Prisma see a schema difference on every future migration.) To make the bug impossible to miss, a test moves the app's clock to the year 2000 and checks the stored time still matches the database. Lesson: a flaky test is a bug report; find the cause before rerunning.
 
 **Did you change your plan after starting?**
 Yes. The first fix for the second race was "never move a status backwards", based on which status changes I believed Stripe allows. When asked to justify it, I checked Stripe's docs: some refunds can go from `succeeded` back to `requires_action`. Not possible with cards, but the rule would silently break with another payment method. So the fix became "the newest read wins", which doesn't depend on Stripe's state machine. Lesson: a design that rests on facts about someone else's system should cite their docs, not memory.
+
+**What was the second race, and why "the newest read wins"?**
+Jobs read Stripe outside the transaction, then lock the order and save. The lock orders the saves, not the reads, so an older read could save last and overwrite newer data, for example putting a refund back to pending. Each order now remembers when the last saved snapshot started reading Stripe (`synced_at`). A job whose read started earlier, or at the same millisecond, doesn't save; it reads again, up to 3 times, then lets BullMQ retry. It's correct because every Stripe change is followed by an event whose job reads after it, and the last save is always the latest read.
+
+**Why not just check that statuses only move forward?**
+That was the first plan. It rests on knowing every status change Stripe allows, and Stripe's docs show some refunds can go from succeeded back to requires_action. Comparing read times works whatever Stripe's rules are.
+
+**Why not lock first and read Stripe inside the transaction?**
+Then a database transaction and a row lock stay open during network calls to Stripe, which can take seconds. Other jobs for that order wait, and slow Stripe calls turn into database pressure.

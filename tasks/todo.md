@@ -18,17 +18,19 @@
 ## Task 2: The newest read from Stripe wins
 
 **Acceptance criteria:**
-- [ ] Migration: `orders.synced_at` (`Timestamptz(3)`, nullable)
-- [ ] Under the order lock, a snapshot with `startedAt` older than `synced_at` is not saved; the job reads Stripe again, up to 3 reads, then fails with a retryable error
-- [ ] A saved snapshot sets `synced_at` to its `startedAt`
-- [ ] Event jobs and repairs both follow the rule
+- [x] Migration: `orders.synced_at` (`Timestamptz(3)`, nullable)
+- [x] Under the order lock, a snapshot with `startedAt` older than `synced_at` is not saved; the job reads Stripe again, up to 3 reads, then fails with a retryable error
+- [x] A saved snapshot sets `synced_at` to its `startedAt`
+- [x] Event jobs and repairs both follow the rule
 
 **Verification:**
-- [ ] e2e: a stale `charge.refunded` read, overtaken by a `refund.updated` save, reads again and ends `SUCCEEDED` / `REFUNDED`
-- [ ] e2e: reads that are always stale stop after 3 with a retryable error and save nothing
-- [ ] e2e: a stale repair reads again too
-- [ ] The first test fails on today's code
-- [ ] Docs updated
+- [x] e2e: a stale `charge.refunded` read, overtaken by a `refund.updated` save, reads again and ends `SUCCEEDED` / `REFUNDED`
+- [x] e2e: reads that are always stale stop after 3 with a retryable error and save nothing
+- [x] e2e: a stale repair reads again too
+- [x] The first test fails on today's code
+- [x] Docs updated
+
+- [x] `received_at` set by a `BEFORE INSERT` trigger (replaces Task 1's `dbgenerated` default); fake-clock test fails without it
 
 **Files likely touched:** `prisma/schema.prisma`, `prisma/migrations/`, `src/worker/stripe-event-handler.ts`, `test/stripe-event-handler.e2e-spec.ts`
 
