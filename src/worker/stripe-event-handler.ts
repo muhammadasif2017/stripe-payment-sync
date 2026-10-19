@@ -21,6 +21,11 @@ export interface StoredEvent {
 
 /** The current state of the Stripe objects behind one event or repair, fetched before the transaction. */
 interface Snapshot {
+  /**
+   * Database time just before the first Stripe call. Any change Stripe made before an event was
+   * stored is already in Stripe's answer, so events stored before this moment are covered.
+   */
+  startedAt: Date;
   orderId: string;
   session?: Stripe.Checkout.Session;
   paymentIntent?: Stripe.PaymentIntent;
@@ -56,7 +61,8 @@ export class StripeEventHandler {
    *   match, an object Stripe says doesn't exist); any other error is worth retrying.
    */
   async handle(event: StoredEvent, attempt: number): Promise<void> {
-    const snapshot = await this.fetchSnapshot(event);
+    const startedAt = await this.databaseNow();
+    const snapshot = { startedAt, ...(await this.fetchSnapshot(event)) };
     await this.apply(snapshot, `event ${event.id}`, { id: event.id, attempt });
   }
 
@@ -72,6 +78,7 @@ export class StripeEventHandler {
    */
   async reconcileSession(sessionId: string): Promise<string[]> {
     const context = { job: 'reconciliation' };
+    const startedAt = await this.databaseNow();
     const snapshot = await withStripeErrors(async (): Promise<Snapshot> => {
       const session = await this.stripeCalls.run('checkout.sessions.retrieve', context, () =>
         this.stripe.checkout.sessions.retrieve(sessionId, { expand: ['payment_intent'] }),
@@ -81,6 +88,7 @@ export class StripeEventHandler {
           ? session.payment_intent
           : undefined;
       return {
+        startedAt,
         orderId: orderIdFrom(session.metadata, session.client_reference_id, `Session ${sessionId}`),
         session,
         paymentIntent,
@@ -202,13 +210,16 @@ export class StripeEventHandler {
 
       // A repair: settle the events about this payment that never got processed, so the history
       // doesn't keep showing them as stuck. Matched on the session or payment intent ID, or on the
-      // payment intent a charge or refund event points at. `last_error` and `attempts` stay as a
-      // record of what went wrong. The status condition matches the partial index
-      // stripe_events_unsettled_idx, so only the few unsettled rows are read.
+      // payment intent a charge or refund event points at. Only events stored before the snapshot
+      // started: a later one may describe a change the snapshot missed, so its own job handles it.
+      // `last_error` and `attempts` stay as a record of what went wrong. The status condition
+      // matches the partial index stripe_events_unsettled_idx, so only the few unsettled rows are
+      // read.
       const objectIds = [snapshot.session?.id, pi?.id].filter((id): id is string => Boolean(id));
       const settled = await tx.$queryRaw<{ id: string }[]>`
         UPDATE stripe_events SET status = 'RECONCILED'
         WHERE status <> 'PROCESSED' AND status <> 'RECONCILED'
+          AND received_at < ${snapshot.startedAt}
           AND (payload->'data'->'object'->>'id' = ANY(${objectIds})
             OR payload->'data'->'object'->>'payment_intent' = ${pi?.id ?? null})
         RETURNING id`;
@@ -216,8 +227,18 @@ export class StripeEventHandler {
     });
   }
 
+  /**
+   * The database's clock, not the app's: `received_at` is set by the database, and the two can
+   * differ. Rounded to milliseconds like `received_at`, so an event stored after this moment never
+   * compares as earlier.
+   */
+  private async databaseNow(): Promise<Date> {
+    const [row] = await this.prisma.$queryRaw<{ now: Date }[]>`SELECT now()::timestamptz(3) AS now`;
+    return row.now;
+  }
+
   /** Fetches the current Stripe objects an event refers to. The event type only says what to fetch. */
-  private async fetchSnapshot(event: StoredEvent): Promise<Snapshot> {
+  private async fetchSnapshot(event: StoredEvent): Promise<Omit<Snapshot, 'startedAt'>> {
     const object = (event.payload as { data?: { object?: Record<string, unknown> } } | null)?.data
       ?.object;
     const objectId = typeof object?.id === 'string' ? object.id : undefined;

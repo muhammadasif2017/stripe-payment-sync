@@ -382,3 +382,19 @@ An independent review (read-only, no shared context) checked the repository befo
   - The top note now only says Stripe runs in test mode. A short "About this project" section before the license says it is a portfolio project built from a fictional client brief and wasn't delivered to a client.
   - The About description ends with "· portfolio project", and the release notes say "Portfolio project; Stripe test mode only".
 - **Commit email:** future commits use the GitHub noreply address (`git config --global user.email`). Earlier commits keep the previous address, because GitHub keeps every pull request's commits.
+
+
+## Stage 9: Race fixes (2026-10-19)
+
+A pre-release review of `main` ran three independent reviewers in parallel (code review, security audit, test coverage). None found anything critical, but two reviewers separately found the same race between reconciliation repairs and the worker, and the code review found a second one. Both can leave an order in the wrong state for good. Plan: `tasks/plan.md`.
+
+### Task 1: A repair settles only events stored before its snapshot
+
+- **The bug.** A repair reads the session, payment intent and refunds from Stripe, then, in its transaction, marks every unsettled event of that payment `RECONCILED`. An event stored *between* the read and the commit was marked too, although the repair never saw its change. Example: the repair reads a refund as `pending`; the refund succeeds and its `refund.updated` event is stored; the repair commits and marks that event `RECONCILED`; the worker skips it. The refund stays `PENDING` and the order `PAID`, and reconciliation never looks again because the payment is `SUCCEEDED`.
+- **Proved first.** A new e2e test stores a `refund.updated` event while the fake Stripe client is answering the repair's refund list. On the old code the repair returned that event as settled; the test failed with `expected [ 'evt_test_…_4' ] to not include 'evt_test_…_4'`.
+- **The fix.** Before its first Stripe call, every snapshot records the database's current time (`startedAt`). The repair's `UPDATE` only settles events with `received_at < startedAt`. An event stored before the read describes a change Stripe had already made, so the read includes it; a later one stays `PENDING` and its own job processes it.
+- **Database clock, not the app's.** `received_at` is set by PostgreSQL. The app container's clock can differ, and comparing times from two clocks would reopen the race by the size of the drift. The time is read with `SELECT now()::timestamptz(3)`: rounded to milliseconds exactly like `received_at`, so an event stored after the read can never round to an earlier time.
+- The existing settling test (events stored before the repair become `RECONCILED`) still passes unchanged.
+- **Plan change before Task 2.** The first plan fixed the second race with "never move a status backwards". Checking Stripe's docs showed that a refund needing the customer's bank details can go from `succeeded` back to `requires_action`. That can't happen with cards, the only payment method here, but the rule would quietly break if another method were added. Task 2 now compares read times instead ("the newest read wins"), reusing `startedAt`.
+- Also: stage 8's plan and tasks archived, `.serena/` (a local code-navigation tool's state) git-ignored.
+- 156 unit tests and 98 e2e tests pass; lint, type check and build are clean.

@@ -23,6 +23,8 @@ describe('StripeEventHandler (e2e)', () => {
     /** Overrides the page size the handler asks for, to spread a few refunds over several pages. */
     refundPageSize?: number;
     refundPages: number;
+    /** Runs while the handler lists refunds, i.e. after its snapshot started and before it commits. */
+    duringRefundsList?: () => Promise<void>;
   } = { sessions: {}, paymentIntents: {}, refunds: {}, refundPages: 0 };
 
   const fail = () => {
@@ -50,18 +52,16 @@ describe('StripeEventHandler (e2e)', () => {
     },
     refunds: {
       // One page of refunds, the way Stripe paginates: `limit` items after `starting_after`.
-      list: (params: { payment_intent: string; limit: number; starting_after?: string }) => {
+      list: async (params: { payment_intent: string; limit: number; starting_after?: string }) => {
         fail();
+        await stripeState.duringRefundsList?.();
         stripeState.refundPages += 1;
         const all = stripeState.refunds[params.payment_intent] ?? [];
         const start = params.starting_after
           ? all.findIndex((r) => r.id === params.starting_after) + 1
           : 0;
         const limit = stripeState.refundPageSize ?? params.limit;
-        return Promise.resolve({
-          data: all.slice(start, start + limit),
-          has_more: start + limit < all.length,
-        });
+        return { data: all.slice(start, start + limit), has_more: start + limit < all.length };
       },
     },
   };
@@ -137,6 +137,7 @@ describe('StripeEventHandler (e2e)', () => {
     stripeState.error = undefined;
     stripeState.refundPageSize = undefined;
     stripeState.refundPages = 0;
+    stripeState.duringRefundsList = undefined;
     // Every Stripe call is logged; keep the test output readable.
     vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
@@ -423,6 +424,33 @@ describe('StripeEventHandler (e2e)', () => {
       expect((await status(refunded.id)).status).toBe('RECONCILED');
       expect((await status(alreadyDone.id)).status).toBe('PROCESSED');
       expect((await status(otherPayment.id)).status).toBe('PENDING');
+    });
+
+    it('leaves an event stored after its snapshot started PENDING, for its own job', async () => {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id);
+      const s = session(order.id, pi.id!);
+      const refund = {
+        id: uid('re_test'),
+        amount: 1000,
+        currency: 'usd',
+        status: 'pending' as const,
+        payment_intent: pi.id,
+      };
+      stripeState.refunds[pi.id!] = [refund];
+      // The refund succeeds while the repair is reading Stripe; its webhook event arrives mid-repair.
+      let late: { id: string } | undefined;
+      stripeState.duringRefundsList = async () => {
+        stripeState.duringRefundsList = undefined;
+        late = await storedEvent('refund.updated', { id: refund.id, payment_intent: pi.id });
+      };
+
+      const settled = await handler.reconcileSession(s.id!);
+
+      expect(settled).not.toContain(late!.id);
+      expect((await prisma.stripeEvent.findUniqueOrThrow({ where: { id: late!.id } })).status).toBe(
+        'PENDING',
+      );
     });
 
     it('settles no event when the repair fails (one transaction)', async () => {

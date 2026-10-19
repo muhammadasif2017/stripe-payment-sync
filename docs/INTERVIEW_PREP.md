@@ -285,3 +285,17 @@ By doing it: a fresh clone into an empty folder, following only the README's Doc
 **Why does the image pin npm?**
 The lockfile was written by npm 11; the Node 22.15 image ships npm 10, which resolves one optional peer dependency differently and refuses the lockfile with "Missing: typescript@5.9.3". Pinning npm 11.14.0 in the Dockerfile, in CI and in `packageManager` makes every install use the same resolver.
 
+
+## Stage 9: Race fixes
+
+**How did you find the race conditions?**
+A pre-release review with three independent reviewers (code, security, tests), each with no shared context. Two of them found the same repair race on their own, which made it worth taking seriously. Every bug was then proved with a test that failed on the old code before anything was fixed.
+
+**What was the repair race?**
+A repair reads Stripe first, then writes in a transaction, and in that transaction it marked every unsettled event of the payment as settled. An event that arrived between the read and the write was marked too, even though the read never saw its change, and the worker then skipped it. A refund could stay pending forever. The fix: record the time just before the read and only settle events stored before it. Anything stored before the read describes a change the read already includes.
+
+**Why use the database's clock?**
+Because the times being compared come from the database (`received_at` defaults to `now()`). Comparing against the app's clock would mix two clocks, and any drift between them reopens the race. It's also rounded to milliseconds the same way as the column, so rounding can't make a later event look earlier.
+
+**Did you change your plan after starting?**
+Yes. The first fix for the second race was "never move a status backwards", based on which status changes I believed Stripe allows. When asked to justify it, I checked Stripe's docs: some refunds can go from `succeeded` back to `requires_action`. Not possible with cards, but the rule would silently break with another payment method. So the fix became "the newest read wins", which doesn't depend on Stripe's state machine. Lesson: a design that rests on facts about someone else's system should cite their docs, not memory.

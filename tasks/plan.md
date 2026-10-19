@@ -1,100 +1,81 @@
-# Implementation Plan: Stage 8 – Tests, CI and Docker
+# Implementation Plan: Stage 9 – Race Fixes
 
 ## Overview
 
-The last stage (see `PROJECT.md`, stage 8, and the README roadmap). The unit tests for the mapping functions and the webhook e2e tests signed with `generateTestHeaderString` already exist (stages 4–5). What's left:
+A pre-release review of `main` (`/ship`: code review, security audit, test coverage) found no critical issues, but two race conditions in the worker and reconciliation can leave an order in the wrong state for good. Two reviewers found the first one independently. This stage fixes them, closes two smaller gaps the same review found, and adds the tests that were missing around money checks.
 
-- A **GitHub Actions** workflow that runs every check on every push and pull request, with PostgreSQL and Redis as services.
-- A **Dockerfile** and Compose services, so `docker compose` starts the API, the worker, PostgreSQL and Redis, with migrations applied first.
-- The **README**, so someone new can run the project from it alone.
-- Items deferred from earlier stages: the `postinstall` problem from stage 1, copying `public/` into the image (stage 3), and the `npm audit` findings (stage 3).
+Out of scope here, kept for a later hardening branch: a rate limit on `POST /checkout`, a newer Node image pinned by digest, helmet/CSP, `HOST` and `TRUST_PROXY` settings, a Redis password, trimming stored payloads, shutdown order, and a sweep that re-queues lost events.
 
-**Done when (from `PROJECT.md`):** CI is green and someone new can run the project from the README alone.
+Stage 1–8 plans and tasks are archived in `tasks/archive/`.
 
-Earlier plans and tasks are archived in `tasks/archive/`.
+## 1. A repair settles only events that were stored before its snapshot
 
-## CI: `.github/workflows/ci.yml`
+**The bug.** `reconcileSession` fetches the session, payment intent and refunds from Stripe before its transaction. Inside the transaction it marks every unsettled event of that payment `RECONCILED`, including events stored after the fetch. Example: a repair lists refunds while one is `pending`; the refund then succeeds and `refund.updated` is stored and queued; the repair commits and marks that event `RECONCILED`; the worker skips it. The refund stays `PENDING` and the order `PAID`. Reconciliation never looks again, because the payment is already `SUCCEEDED`.
 
-```
-on: push, pull_request
-job "checks" (ubuntu-latest, Node 22)
-  services: postgres:17-alpine, redis:7-alpine (health-checked)
-  npm ci                      also runs `prisma generate`; no database needed
-  npm run lint
-  npm run typecheck
-  npm test
-  npm run build
-  npm run test:e2e            against payments_test and Redis database 1
-  npm audit --omit=dev --audit-level=high
-job "docker" (needs: checks)
-  docker compose --profile app up --build -d
-  wait for /health = 200 on the API, then compose down
-```
+**The fix.**
+- Before the Stripe calls, read the database's clock (`SELECT now()`), not the app's, because `received_at` is set by the database and the two clocks can differ.
+- The settling `UPDATE` adds `AND received_at < $snapshotStartedAt`. An event stored before the fetch describes a change that happened before the fetch, so the snapshot already contains it. An event stored later is left `PENDING` and its own job processes it.
 
-- **Settings come from the workflow, not `.env`.** CI has no `.env`. The workflow sets `DATABASE_URL`, `TEST_DATABASE_URL`, `REDIS_URL`, `TEST_REDIS_URL`, `APP_URL` and `ADMIN_PASSWORD`. The e2e config already supplies dummy Stripe values, so CI never sees a real key and needs no secrets.
-- **The database guard stays on.** CI's services listen on `localhost`, so the stage 2 "local only" guard passes without `ALLOW_REMOTE_TEST_DATABASE`.
-- **Actions pinned to commit SHAs** (decision 2), with the version in a comment: `actions/checkout` (v7.0.1) and `actions/setup-node` (v7.1.0). A tag can be moved to other code; a SHA can't.
-- **Least privilege:** `permissions: contents: read`, and a `concurrency` group so a new push cancels the old run.
-- **The Docker smoke test** builds the image and starts the whole stack with dummy settings. It proves the image starts, connects, migrates and answers `/health`. It makes no Stripe calls.
+## 2. The newest read from Stripe wins
 
-## Docker
+**The bug.** `handle()` also fetches from Stripe before its transaction. The order-row lock makes two jobs for the same order save one at a time, but not in the order they fetched. The payment and refund upserts overwrite the status unconditionally, so an older snapshot that saves last wins. Examples:
+- A `charge.refunded` job sees a refund `pending`; a `refund.updated` job sees it `succeeded` and saves first; the first job saves afterwards. Refund back to `PENDING`, order back to `PAID`, never repaired.
+- A `payment_intent.payment_failed` job (card declined) saves after the `checkout.session.completed` job of the successful retry. Order shows `PAYMENT_FAILED` until the next daily reconciliation.
 
-**`Dockerfile`, multi-stage, on `node:22.15.0-alpine`** (pinned, the same Node as development):
+**The fix (decision 1).**
+- New column `orders.synced_at` (`Timestamptz(3)`, nullable): the `startedAt` of the last snapshot saved for the order. Task 1 already records `startedAt` (database time, before the first Stripe call) on every snapshot.
+- Under the order lock, a snapshot older than `synced_at` is not saved. The job reads Stripe again and tries once more, up to 3 reads; after that it fails with a retryable error and BullMQ retries it later.
+- A snapshot that is saved sets `synced_at` to its `startedAt`. Equal times are saved (the same instant, so neither is older).
+- Repairs follow the same rule, because they write the same rows.
 
-1. **`build`:** `npm ci` (all dependencies; `postinstall` generates the Prisma client), then `npm run build`. The generated client is compiled into `dist/generated`.
-2. **`runtime`:** `npm ci --omit=dev --ignore-scripts`, then copy in `dist/`, `public/` and `prisma/` (schema and migrations). It runs as the non-root `node` user, has a `HEALTHCHECK` on `/health`, and its command is `node dist/main.js`.
-   - **This fixes the stage 1 `postinstall` problem.** `--ignore-scripts` skips `prisma generate`, which fails without the dev-only Prisma CLI. The client was already generated and compiled in stage 1 of the build.
-   - The runtime image is checked for `dist/generated/prisma` and `public/index.html`.
-3. **`migrate`:** the build stage plus `prisma migrate deploy` as its command. The Prisma CLI is a dev dependency, so the slim runtime image doesn't carry it.
+**Why not "never move a status backwards"** (the first recommendation, dropped after checking Stripe's docs): it depends on a list of which status changes Stripe allows. The docs show the list is longer than assumed: a refund that needs the customer's bank details can go from `succeeded` back to `requires_action`. That can't happen with card payments, the only kind this project takes, but the rule would quietly break if another payment method were added. Comparing read times doesn't depend on Stripe's state machine at all.
 
-**`.dockerignore`:** `node_modules`, `dist`, `.env*` except `.env.example`, `.git`, `.claude`, `tasks`, `docs`, `test`, coverage. Secrets and local builds never enter the image.
+**Why not fetch Stripe inside the lock:** a network call while holding the order lock, inside the transaction.
 
-**Compose (decision 1: an `app` profile):**
+## 3. Recording a failure does not undo a settled event
 
-- `docker compose up -d` still starts only PostgreSQL and Redis, as today, for `npm run start:dev`.
-- `docker compose --profile app up --build` also starts:
-  - `migrate`: runs once, then exits.
-  - `api`: `WORKER_ENABLED=false`, published on `127.0.0.1:3000`, waits for `migrate` to complete successfully.
-  - `worker`: `WORKER_ENABLED=true`, no published port, same wait.
-- Inside Compose, the database and Redis URLs point at the service names (`postgres:5432`, `redis:6379`), set in the Compose file. Everything else (Stripe keys, admin password, cron) comes from `.env` through `env_file`.
-- `init: true`, so `SIGTERM` reaches Node and the stage 1 shutdown hooks close the database pool and BullMQ cleanly. `restart: unless-stopped` for `api` and `worker`.
+**The bug.** `recordFailure` writes `status` without looking at the current one. If a repair settles an event while that event's job is running, and the job then fails, the row goes back to `PENDING` or `FAILED`.
 
-## Dependencies: `npm audit`
+**The fix.** `updateMany` with `status IN ('PENDING', 'FAILED')`. If no row matched, log that the event was already settled and keep the original error rethrown as today.
 
-- **Production tree:** 4 high findings, all inside the Prisma CLI's own dependencies (`deepmerge-ts` via `@prisma/config`, and `mysql2`). The CLI shows up there because `@prisma/client` lists it as an optional peer. `npm audit` reports a non-breaking fix (`fix: true`). Task 1 applies `npm audit fix` without `--force`, reviews the lockfile diff and runs every check. Anything that stays is written down with the reason.
-- **CI blocks on high findings in production dependencies only.** Dev tools (`tmp` and `undici` via the Nest CLI) don't ship in the image; they're reported in the build log.
+## 4. The schedule guard also catches a trailing slash and other letter case
 
-## README
+**The bug.** The guard's regexes are case-sensitive and end at `$`. Bull Board's Express router is neither strict nor case-sensitive, so `.../job-schedulers/daily-reconciliation/` and `/API/queues/...` reach the edit and remove handlers. Only a logged-in admin can do this, but "remove" stops the daily reconciliation until the worker restarts.
 
-- **Two ways to run, both copy-paste:** "with Docker only" (`--profile app`; needs Docker and a Stripe test key) and "for development" (today's quick start).
-- A CI badge. Node 22.12+ and Docker in the requirements.
-- **Why a queue,** in its own short section, as the brief asks. The content exists across "How it works"; it gets one heading.
-- Check the stage 8 diagram from `PROJECT.md`'s Architecture section against the README's existing flow diagram, and add whatever is missing.
-- Configuration table: the Compose-only variables.
-- Roadmap: stage 8 ticked.
+**The fix.** Allow an optional trailing slash and ignore case: `\/?$/i` on both patterns.
 
-## Decisions for you
+## 5. Tests for checks nothing currently proves
 
-1. **Compose: an `app` profile? (recommended: yes)** `docker compose up -d` keeps meaning "databases for development", so the API on port 3000 never clashes with `npm run start:dev`. The full stack is `docker compose --profile app up --build`: one line in the README. The alternative is starting everything by default, with development using `docker compose up -d postgres redis`.
-2. **Pin GitHub Actions to commit SHAs? (recommended: yes)** This protects against a moved tag. The cost is updating the SHA by hand when upgrading.
-3. **Rate-limit dashboard logins? (recommended: yes)** At most 10 failed Basic auth attempts per 15 minutes per IP, then 429. It's small (`express-rate-limit`, one middleware, tests) and was promised for this stage. HTTPS stays a README note: the stack only listens on `127.0.0.1`, and a production proxy depends on where it's deployed.
-4. **Your repository is private.** GitHub Actions works there (free minutes apply). The CI badge only shows to people with access. Publishing it as a portfolio piece needs the repository public eventually. That's your call, and nothing in this stage depends on it.
+No code change; each test is first shown to fail by breaking the code it covers.
+- **Payment intent amount check** (`stripe-event-handler.ts:133`): a `payment_intent.*` event whose PI amount doesn't match the order fails permanently and saves nothing. Today only the session check is reached.
+- **Reconciliation's `SUCCEEDED` filter** (`reconciliation.service.ts:59`): a paid session whose only payment row is `FAILED` (an earlier declined card) counts as missing and is repaired.
+- **Queue retry settings** (`test/queue.e2e-spec.ts:30`): assert the real values (5 attempts, exponential backoff from 10 s, failed jobs kept) instead of comparing the constant with itself.
+- **Login-limit test that only passes in order** (`test/admin-login-limit.e2e-spec.ts:50`): lock the IP out inside the test, so it passes when run alone.
 
-## The "Done when" check
+## Decisions
 
-1. **CI:** both jobs green on the stage 8 pull request.
-2. **"Someone new":** a fresh `git clone` into a scratch folder, following only the README's Docker section.
-   - Its `.env` gets the Stripe test key, the webhook secret and a new admin password. Ports are changed if the development containers are using them, as the README's tip explains.
-   - Then: `/health` is 200, the dashboard asks for a login, a test payment with card 4242 ends `PAID` (with `stripe listen` forwarding to the containerised API), and the worker container's log shows the Stripe calls.
-   - Afterwards: `docker compose --profile app down -v` in the clone, and the scratch folder is deleted. Your development containers and data aren't touched.
+1. **How to stop an older snapshot winning: the newest read wins (decided).** Replaces the first recommendation, "never move a status backwards"; see section 2 for why.
+2. **Scope: correctness only (decided).** The checkout rate limit and the Node upgrade are the security audit's two medium findings; they get their own hardening branch next, so this PR stays about one thing.
 
-## Risks
+## Verification
 
-- **Prisma in the slim image.** Whether `npm ci --omit=dev` pulls in the Prisma CLI as an optional peer is checked in the built image, not assumed. Either way, the runtime only needs `@prisma/client` and the compiled client.
-- **Windows line endings.** `.gitattributes` exists. Shell scripts used in the image must be LF; the plan uses none (the Dockerfile `CMD` and the Compose commands only).
-- **CI timing.** Unit and e2e tests take about 40 seconds locally. The image build adds a few minutes, cached by `npm ci` layers.
-- **The worker container calls Stripe with the key from `.env`.** That includes the daily reconciliation. Test mode only, as everywhere in this project.
+- Every fix starts with a test that fails on today's code (Prove-It), then passes.
+  - Task 1: an e2e test where the fake `refunds.list` stores a new `refund.updated` event while the repair runs; that event stays `PENDING` and isn't in the repair's returned list. A second case: an event stored before the repair is still settled.
+  - Task 2: e2e: a `charge.refunded` job whose first read is older than a `refund.updated` that saves in between reads Stripe again and ends with the newer state (refund `SUCCEEDED`, order `REFUNDED`); a job whose reads are always older stops after 3 reads with a retryable error and saves nothing; a repair follows the same rule.
+  - Task 3: e2e: a stubbed handler sets its event to `RECONCILED`, then throws; the status stays `RECONCILED`.
+  - Task 4: unit cases in `schedule-guard.spec.ts` for a trailing slash and `/API/`, for edit and remove; `Run now` still allowed.
+- All five checks before each commit; CI green.
+- `/ship` again on this branch's diff before the PR.
+
+## Docs
+
+- `docs/BUILD_LOG.md`, `docs/INTERVIEW_PREP.md` (the two races, why the newest read wins rather than "never go backwards" or "fetch inside the lock", why the database clock), `docs/TECH_STACK.md` if anything changes.
+- README known limits if one changes. `CLAUDE.md` if a rule changes.
+
+## Housekeeping
+
+The first commit also archives stage 8's plan and tasks (`tasks/archive/stage-8-*.md`, with its last two boxes ticked) and adds `.serena/` to `.gitignore`.
 
 ## Task List
 
-Tasks are tracked in `tasks/todo.md`.
+Five tasks, tracked in `tasks/todo.md`. One commit per task.
