@@ -86,7 +86,7 @@
 - [x] Assumptions and accepted limits in README and docs
 
 ## Checkpoint: Complete
-- [ ] All five checks pass locally and in CI
-- [ ] `/ship` on the branch diff: GO
-- [ ] Commit, push, open PR
+- [x] All five checks pass locally and in CI
+- [x] `/ship` on the branch diff: GO
+- [x] Commit, push, open PR
 - [ ] Human review and merge
