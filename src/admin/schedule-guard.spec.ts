@@ -25,6 +25,11 @@ describe('rejectScheduleChanges', () => {
     ['Edit schedule', 'PATCH', BASE],
     ['Remove scheduler', 'PUT', `${BASE}/remove`],
     ['Remove scheduler with a query string', 'PUT', `${BASE}/remove?x=1`],
+    // Bull Board's Express router is neither strict nor case-sensitive, so these reach the same routes.
+    ['Edit schedule with a trailing slash', 'PATCH', `${BASE}/`],
+    ['Remove scheduler with a trailing slash', 'PUT', `${BASE}/remove/`],
+    ['Edit schedule in other letter case', 'PATCH', BASE.replace('/api/', '/API/')],
+    ['Remove scheduler in other letter case', 'PUT', `${BASE}/REMOVE`],
   ])('refuses %s with 403', (_case, method, url) => {
     const { res, next } = call(method, url);
 
@@ -38,6 +43,7 @@ describe('rejectScheduleChanges', () => {
 
   it.each([
     ['Run now', 'PUT', `${BASE}/run`],
+    ['Run now with a trailing slash', 'PUT', `${BASE}/run/`],
     ['the schedulers list', 'GET', '/admin/queues/api/job-schedulers'],
     ['a job retry', 'PUT', '/admin/queues/api/queues/stripe-events/evt_1/retry'],
     ['a job data update', 'PATCH', '/admin/queues/api/queues/stripe-events/evt_1/update-data'],

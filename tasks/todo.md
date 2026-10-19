@@ -50,13 +50,15 @@
 ## Task 4: Schedule guard catches a trailing slash and other letter case
 
 **Acceptance criteria:**
-- [ ] Both patterns accept an optional trailing slash and ignore case
-- [ ] `Run now` stays allowed
+- [x] Both patterns accept an optional trailing slash and ignore case
+- [x] `Run now` stays allowed
 
 **Verification:**
-- [ ] Unit: trailing slash and `/API/` for edit and remove are refused; `Run now` passes
-- [ ] The new cases fail on today's code
-- [ ] Docs updated
+- [x] Unit: trailing slash and `/API/` for edit and remove are refused; `Run now` passes
+- [x] The new cases fail on today's code
+- [x] Docs updated
+
+- [x] e2e: the same requests through the real app get 403 and leave the scheduler unchanged
 
 **Files likely touched:** `src/admin/schedule-guard.ts`, `src/admin/schedule-guard.spec.ts`
 

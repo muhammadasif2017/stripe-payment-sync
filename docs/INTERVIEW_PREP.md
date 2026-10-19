@@ -314,3 +314,6 @@ Then a database transaction and a row lock stay open during network calls to Str
 
 **Why `updateMany` with a status condition instead of reading the status first?**
 Reading, checking and then writing leaves a gap where a repair can commit in between. Putting the condition in the `UPDATE` itself (`WHERE id = … AND status IN ('PENDING','FAILED')`) makes the check and the write one atomic statement. The number of rows changed tells the code whether it happened.
+
+**How was the dashboard's schedule guard bypassed, and how did you fix it?**
+It compared the URL with exact patterns, but the router behind it treats `/x` and `/x/` as the same route and ignores letter case. So `.../job-schedulers/daily-reconciliation/` slipped past the guard and still reached the handler. The patterns now allow both. The lesson: a path check in middleware must match the way the router matches, so I tested which variants the router actually accepts instead of guessing.

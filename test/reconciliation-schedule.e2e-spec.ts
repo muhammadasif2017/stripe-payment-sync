@@ -98,4 +98,28 @@ describe('Reconciliation schedule (e2e)', () => {
       expect.objectContaining({ key: RECONCILIATION_SCHEDULER_ID, pattern: '0 3 * * *' }),
     ]);
   });
+
+  it('also refuses them with a trailing slash or in other letter case', async () => {
+    const server = app.getHttpServer();
+    const upper = schedulerRoute.replace('/api/', '/API/');
+    for (const path of [`${schedulerRoute}/`, upper]) {
+      await request(server)
+        .patch(path)
+        .auth('admin', 'e2e-dashboard-password')
+        .set('Sec-Fetch-Site', 'same-origin')
+        .send({ pattern: '* * * * *' })
+        .expect(403);
+    }
+    for (const path of [`${schedulerRoute}/remove/`, `${upper}/REMOVE`]) {
+      await request(server)
+        .put(path)
+        .auth('admin', 'e2e-dashboard-password')
+        .set('Sec-Fetch-Site', 'same-origin')
+        .expect(403);
+    }
+
+    expect(await queue.getJobSchedulers()).toEqual([
+      expect.objectContaining({ key: RECONCILIATION_SCHEDULER_ID, pattern: '0 3 * * *' }),
+    ]);
+  });
 });

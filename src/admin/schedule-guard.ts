@@ -3,11 +3,13 @@ import type { NextFunction, Request, Response } from 'express';
 
 /**
  * Bull Board's routes that change or delete a job scheduler ("Edit schedule", "Remove scheduler").
- * "Run now" (`.../run`) is not matched and stays allowed.
+ * "Run now" (`.../run`) is not matched and stays allowed. Bull Board's Express router is neither
+ * strict nor case-sensitive, so a trailing slash and any letter case reach the same routes; the
+ * patterns allow both.
  */
 const SCHEDULE_CHANGES: { method: string; path: RegExp }[] = [
-  { method: 'PATCH', path: /\/api\/queues\/[^/]+\/job-schedulers\/[^/]+$/ },
-  { method: 'PUT', path: /\/api\/queues\/[^/]+\/job-schedulers\/[^/]+\/remove$/ },
+  { method: 'PATCH', path: /\/api\/queues\/[^/]+\/job-schedulers\/[^/]+\/?$/i },
+  { method: 'PUT', path: /\/api\/queues\/[^/]+\/job-schedulers\/[^/]+\/remove\/?$/i },
 ];
 
 const logger = new Logger('ScheduleGuard');

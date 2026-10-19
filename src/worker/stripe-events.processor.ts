@@ -163,8 +163,9 @@ export class StripeEventsProcessor extends WorkerHost {
   /**
    * Saves the attempt count and the error on the event: `FAILED` when no retry will follow, otherwise
    * still `PENDING`. An event settled while this attempt ran (`RECONCILED` by a repair, or
-   * `PROCESSED`) is left as it is: that result is newer than this attempt's failure. If saving fails too (the database
-   * is the problem), that is logged and the original error still goes back to BullMQ.
+   * `PROCESSED`) is left as it is: that result is newer than this attempt's failure. If saving fails
+   * too (the database is the problem), that is logged and the original error still goes back to
+   * BullMQ.
    */
   private async recordFailure(
     eventId: string,
