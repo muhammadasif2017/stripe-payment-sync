@@ -463,3 +463,8 @@ A second `/ship` review (code, security, tests) on this branch's diff approved t
 | A read one millisecond later saves at once | — (pins the other side of the rule) | — |
 | A repair settles an event stored 1 ms before its read, not one stored in the same millisecond | `<` changed to `<=` | Failed |
 | The overtaken job reads Stripe exactly 3 times in total | — (the 5 ms sleep it had was removed: equal times already count as older) | — |
+
+**Smaller hardening from the review.**
+- **A clock that went back is logged.** If an order's `synced_at` is more than 60 s ahead of a new read, no running job can have saved it: the database clock stepped back, or someone set the column by hand. Until the clock passes it, every read for that order loses and its jobs fail, so the handler now logs `synced_at of order … is N s ahead of the database clock`. The "gives up after 3 reads" test checks the warning.
+- **A successful save keeps `RECONCILED`.** Task 3 stopped a failing attempt from overwriting an event a repair had settled. The success path still set `PROCESSED` over `RECONCILED`; harmless, but inconsistent. It now updates only `PENDING` or `FAILED` events. The new test (a repair settles the event while its job reads Stripe) failed before the change.
+- **The trigger overrides an explicit value too.** A new test inserts `received_at = 2000-01-01` itself and checks the stored time is the database's.

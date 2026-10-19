@@ -50,6 +50,18 @@ describe('stripe_events table (e2e)', () => {
     expect(Number(row.drift)).toBeLessThan(60);
   });
 
+  it('overrides a received_at the insert sends itself', async () => {
+    const event = makeEvent('received-at-explicit');
+    await prisma.stripeEvent.create({
+      data: { ...event, receivedAt: new Date('2000-01-01T00:00:00Z') },
+    });
+
+    const [row] = await prisma.$queryRaw<{ drift: number }[]>`
+      SELECT abs(extract(epoch FROM now() - received_at)) AS drift
+      FROM stripe_events WHERE id = ${event.id}`;
+    expect(Number(row.drift)).toBeLessThan(60);
+  });
+
   it('rejects a second event with the same Stripe event ID (P2002) and keeps one row', async () => {
     // Inserts its own first copy, so this test doesn't depend on the one above.
     const event = makeEvent('duplicate');

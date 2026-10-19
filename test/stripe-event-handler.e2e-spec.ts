@@ -389,6 +389,26 @@ describe('StripeEventHandler (e2e)', () => {
       expect(stripeState.refundPages).toBe(3);
     });
 
+    it('leaves an event RECONCILED when a repair settled it while its job was running', async () => {
+      const { pi } = await paidOrderWithPendingRefund();
+      const event = await storedEvent('charge.refunded', {
+        id: uid('ch_test'),
+        payment_intent: pi.id,
+      });
+      stripeState.duringRefundsList = async () => {
+        stripeState.duringRefundsList = undefined;
+        await prisma.stripeEvent.update({
+          where: { id: event.id },
+          data: { status: 'RECONCILED' },
+        });
+      };
+
+      await handler.handle(event, 1);
+
+      const row = await prisma.stripeEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(row).toMatchObject({ status: 'RECONCILED', processedAt: null });
+    });
+
     it('treats a read that started in the same millisecond as the saved one as older', async () => {
       const { order, pi } = await paidOrderWithPendingRefund();
       const [{ now }] = await prisma.$queryRaw<
@@ -467,6 +487,10 @@ describe('StripeEventHandler (e2e)', () => {
       expect(error).not.toBeInstanceOf(PermanentProcessingError);
       expect((error as Error).message).toMatch(/older than the one saved .* after 3 reads/);
       expect(stripeState.refundPages).toBe(3);
+      // A saved read an hour in the future means the database clock went back; say so.
+      expect(Logger.prototype.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/synced_at of order .* is \d+ s ahead of the database clock/),
+      );
       const saved = await orderWithRows(order.id);
       expect(saved.payments[0].refunds).toHaveLength(0);
       expect(saved.status).toBe('PAID');

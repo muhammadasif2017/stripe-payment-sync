@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import Stripe from 'stripe';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -48,6 +48,13 @@ const MAX_SNAPSHOT_READS = 3;
 class StaleSnapshotError extends Error {}
 
 /**
+ * A saved read this far ahead of a new one can't come from a job still running: the database clock
+ * went back (or someone set `synced_at` by hand). Until the clock catches up, the order's reads all
+ * lose and its jobs fail, so it is logged.
+ */
+const CLOCK_WARNING_MS = 60_000;
+
+/**
  * Applies Stripe's current state to the database: fetches the latest objects from Stripe, then writes
  * the payment, refunds and order status in one transaction. Used for webhook events (which also mark
  * their `stripe_events` row PROCESSED in that transaction) and for reconciliation repairs (which have
@@ -55,6 +62,8 @@ class StaleSnapshotError extends Error {}
  */
 @Injectable()
 export class StripeEventHandler {
+  private readonly logger = new Logger(StripeEventHandler.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(STRIPE_CLIENT) private readonly stripe: Stripe,
@@ -170,6 +179,12 @@ export class StripeEventHandler {
       // may hold older data, so it must not overwrite it. Equal times count as older, so of two reads
       // in the same millisecond the second to save reads again rather than guessing which is newer.
       if (order.syncedAt && snapshot.startedAt <= order.syncedAt) {
+        const aheadMs = order.syncedAt.getTime() - snapshot.startedAt.getTime();
+        if (aheadMs > CLOCK_WARNING_MS) {
+          this.logger.warn(
+            `synced_at of order ${order.id} is ${Math.round(aheadMs / 1000)} s ahead of the database clock; its reads can't be saved until the clock passes it`,
+          );
+        }
         throw new StaleSnapshotError();
       }
 
@@ -243,8 +258,9 @@ export class StripeEventHandler {
       });
 
       if (event) {
-        await tx.stripeEvent.update({
-          where: { id: event.id },
+        // A repair may have settled the event while this job read Stripe; RECONCILED then stays.
+        await tx.stripeEvent.updateMany({
+          where: { id: event.id, status: { in: ['PENDING', 'FAILED'] } },
           data: {
             status: 'PROCESSED',
             attempts: event.attempt,
