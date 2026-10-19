@@ -320,3 +320,9 @@ It compared the URL with exact patterns, but the router behind it treats `/x` an
 
 **How do you know a test actually tests something?**
 Break the code it covers and watch it fail. In this project two old tests passed whatever the code did: one compared the queue's retry settings with the same constant that set them, and one only meant something after the previous test had run. Both were rewritten, and every new test in stage 9 was shown to fail on broken code before it counted.
+
+**The fix for the guard bypass was itself bypassed. What did you learn?**
+The first fix patched the URL patterns for the variants I had tested: a trailing slash and letter case. A second review found that a `#` fragment or a backslash also slipped through, because Express parses the URL differently from the raw text the guard checked. Rather than patch the patterns again, the guard became an Express `Router` with Bull Board's own route paths, so it reads every path exactly as the dashboard's router does. When a check has to agree with another component, use that component's own logic instead of imitating it.
+
+**What does this design assume?**
+That the database clock doesn't go back, and that Stripe's `retrieve` and `list` calls show a change as soon as its webhook is sent (Stripe's docs promise this for list APIs, not for Search). Both are written down, and a clock that did go back is logged with the affected order.

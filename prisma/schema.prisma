@@ -40,8 +40,8 @@ model StripeEvent {
   /// When Stripe created the event (event.created); events can arrive out of order.
   stripeCreatedAt DateTime          @map("stripe_created_at") @db.Timestamptz(3)
   /// Always the database's clock: Prisma fills `now()` from the app's clock, so a trigger
-  /// (migration 20261019181444_order_synced_at) overwrites it on insert. Repairs compare it with the
-  /// database's clock to know which events their Stripe snapshot already covers.
+  /// (migration 20261019181445_stripe_events_received_at_trigger) overwrites it on insert. Repairs
+  /// compare it with the database's clock to know which events their Stripe snapshot covers.
   receivedAt      DateTime          @default(now()) @map("received_at") @db.Timestamptz(3)
   processedAt     DateTime?         @map("processed_at") @db.Timestamptz(3)
 

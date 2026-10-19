@@ -76,6 +76,15 @@
 
 **Files likely touched:** `test/stripe-event-handler.e2e-spec.ts`, `test/reconciliation.e2e-spec.ts`, `test/queue.e2e-spec.ts`, `test/admin-login-limit.e2e-spec.ts`
 
+## Review follow-ups (second `/ship`)
+
+- [x] Schedule guard as an Express `Router` with Bull Board's routes: `#`, `\` refused; empty and obliterate refused on the reconciliation queue
+- [x] Handler tests move stored events 1 s back (no same-millisecond flake)
+- [x] Tests: read time from the database clock; equal-millisecond rules on both comparisons; read count
+- [x] Warning for a future `synced_at`; a successful save keeps `RECONCILED`
+- [x] Migrations rewritten: no-op deleted, trigger in its own migration with `search_path`
+- [x] Assumptions and accepted limits in README and docs
+
 ## Checkpoint: Complete
 - [ ] All five checks pass locally and in CI
 - [ ] `/ship` on the branch diff: GO
