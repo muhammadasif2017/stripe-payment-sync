@@ -12,6 +12,7 @@ import {
   type StripeEventJob,
 } from './../src/queue/queue.module.js';
 import { STRIPE_CLIENT } from './../src/stripe/stripe.module.js';
+import { PermanentProcessingError } from './../src/worker/mapping.js';
 import { WorkerModule } from './../src/worker/worker.module.js';
 
 // Runs a real BullMQ worker on the test Redis and the test database, with a fake Stripe client.
@@ -206,6 +207,28 @@ describe('Stripe events worker (e2e)', () => {
     const event = await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } });
     expect(event).toMatchObject({ status: 'FAILED', attempts: 1 });
     expect(event.lastError).toContain('no valid order_id');
+  });
+
+  it('a failure does not undo a repair that settled the event while its job was running', async () => {
+    const { eventId } = await paidOrderEvent();
+    // While the job runs, a reconciliation repair settles its event; then the job's attempt fails.
+    vi.spyOn(prisma, '$transaction').mockImplementationOnce(async () => {
+      await prisma.stripeEvent.update({ where: { id: eventId }, data: { status: 'RECONCILED' } });
+      throw new PermanentProcessingError('Amount does not match the order');
+    });
+
+    await enqueue(eventId);
+    const job = await settled(eventId);
+
+    expect(await job.getState()).toBe('failed');
+    expect(await prisma.stripeEvent.findUniqueOrThrow({ where: { id: eventId } })).toMatchObject({
+      status: 'RECONCILED',
+      attempts: 0,
+      lastError: null,
+    });
+    expect(Logger.prototype.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`Event ${eventId} was settled meanwhile`),
+    );
   });
 
   it('skips an event that is already PROCESSED without calling Stripe', async () => {

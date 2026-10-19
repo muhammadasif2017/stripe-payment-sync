@@ -37,13 +37,13 @@
 ## Task 3: Recording a failure does not undo a settled event
 
 **Acceptance criteria:**
-- [ ] `recordFailure` only updates rows with status `PENDING` or `FAILED`
-- [ ] A skipped update is logged; the original error is still rethrown
+- [x] `recordFailure` only updates rows with status `PENDING` or `FAILED`
+- [x] A skipped update is logged; the original error is still rethrown
 
 **Verification:**
-- [ ] e2e: a handler that settles its event and then throws leaves it `RECONCILED`
-- [ ] The test fails on today's code
-- [ ] Docs updated
+- [x] e2e: a handler that settles its event and then throws leaves it `RECONCILED`
+- [x] The test fails on today's code
+- [x] Docs updated
 
 **Files likely touched:** `src/worker/stripe-events.processor.ts`, `test/worker.e2e-spec.ts`
 

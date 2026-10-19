@@ -311,3 +311,6 @@ That was the first plan. It rests on knowing every status change Stripe allows, 
 
 **Why not lock first and read Stripe inside the transaction?**
 Then a database transaction and a row lock stay open during network calls to Stripe, which can take seconds. Other jobs for that order wait, and slow Stripe calls turn into database pressure.
+
+**Why `updateMany` with a status condition instead of reading the status first?**
+Reading, checking and then writing leaves a gap where a repair can commit in between. Putting the condition in the `UPDATE` itself (`WHERE id = … AND status IN ('PENDING','FAILED')`) makes the check and the write one atomic statement. The number of rows changed tells the code whether it happened.
