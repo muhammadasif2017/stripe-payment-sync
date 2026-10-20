@@ -23,6 +23,11 @@ describe('StripeEventHandler (e2e)', () => {
     /** Overrides the page size the handler asks for, to spread a few refunds over several pages. */
     refundPageSize?: number;
     refundPages: number;
+    /**
+     * Runs after a page of refunds is read and before the handler gets it: after the snapshot
+     * started reading Stripe and before it is saved.
+     */
+    duringRefundsList?: () => Promise<void>;
   } = { sessions: {}, paymentIntents: {}, refunds: {}, refundPages: 0 };
 
   const fail = () => {
@@ -50,7 +55,7 @@ describe('StripeEventHandler (e2e)', () => {
     },
     refunds: {
       // One page of refunds, the way Stripe paginates: `limit` items after `starting_after`.
-      list: (params: { payment_intent: string; limit: number; starting_after?: string }) => {
+      list: async (params: { payment_intent: string; limit: number; starting_after?: string }) => {
         fail();
         stripeState.refundPages += 1;
         const all = stripeState.refunds[params.payment_intent] ?? [];
@@ -58,10 +63,12 @@ describe('StripeEventHandler (e2e)', () => {
           ? all.findIndex((r) => r.id === params.starting_after) + 1
           : 0;
         const limit = stripeState.refundPageSize ?? params.limit;
-        return Promise.resolve({
+        const page = {
           data: all.slice(start, start + limit),
           has_more: start + limit < all.length,
-        });
+        };
+        await stripeState.duringRefundsList?.();
+        return page;
       },
     },
   };
@@ -70,6 +77,9 @@ describe('StripeEventHandler (e2e)', () => {
     fakeStripe as unknown as Stripe,
     new StripeCalls(),
   );
+
+  /** The handler's private clock read, so a test can pin the time a read starts. */
+  const databaseClock = () => handler as unknown as { databaseNow: () => Promise<Date> };
 
   let n = 0;
   const uid = (prefix: string) => `${prefix}_${run}_${++n}`;
@@ -116,14 +126,24 @@ describe('StripeEventHandler (e2e)', () => {
     return s;
   }
 
-  /** Stores an event row like the webhook does and returns what the worker would load. */
-  async function storedEvent(type: string, object: Record<string, unknown>) {
+  /**
+   * Stores an event row like the webhook does and returns what the worker would load. `received_at`
+   * is moved 1 s back, so an event stored just before a repair can't land in the same millisecond as
+   * the repair's start (repairs settle only events stored strictly before it). `late` keeps the
+   * database's time, for an event stored while a repair runs.
+   */
+  async function storedEvent(type: string, object: Record<string, unknown>, { late = false } = {}) {
     const id = uid('evt_test');
     eventIds.push(id);
     const payload = { id, type, data: { object } } as Prisma.InputJsonObject;
     await prisma.stripeEvent.create({
       data: { id, type, payload, stripeCreatedAt: new Date() },
     });
+    if (!late) {
+      // After the insert: the trigger sets received_at on INSERT only.
+      await prisma.$executeRaw`
+        UPDATE stripe_events SET received_at = received_at - interval '1 second' WHERE id = ${id}`;
+    }
     return { id, type, payload: payload as Prisma.JsonValue };
   }
 
@@ -137,6 +157,7 @@ describe('StripeEventHandler (e2e)', () => {
     stripeState.error = undefined;
     stripeState.refundPageSize = undefined;
     stripeState.refundPages = 0;
+    stripeState.duringRefundsList = undefined;
     // Every Stripe call is logged; keep the test output readable.
     vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
@@ -319,6 +340,182 @@ describe('StripeEventHandler (e2e)', () => {
     ).toBe(true);
   });
 
+  describe('the newest read from Stripe wins', () => {
+    /** A paid order whose payment is recorded, with one full refund that Stripe reports as pending. */
+    async function paidOrderWithPendingRefund() {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id);
+      await handler.handle(
+        await storedEvent('checkout.session.completed', { id: session(order.id, pi.id!).id }),
+        1,
+      );
+      const refund: Partial<Stripe.Refund> = {
+        id: uid('re_test'),
+        amount: 4900,
+        currency: 'usd',
+        status: 'pending',
+        payment_intent: pi.id,
+      };
+      stripeState.refunds[pi.id!] = [refund];
+      return { order, pi, refund };
+    }
+
+    it('a job whose read was overtaken by a newer save reads Stripe again instead of saving old data', async () => {
+      const { order, pi, refund } = await paidOrderWithPendingRefund();
+      const chargeRefunded = await storedEvent('charge.refunded', {
+        id: uid('ch_test'),
+        payment_intent: pi.id,
+      });
+      const refundUpdated = await storedEvent('refund.updated', {
+        id: refund.id,
+        payment_intent: pi.id,
+      });
+      // charge.refunded has read the refund as pending. Before it saves, the refund succeeds and
+      // the refund.updated job reads and saves that.
+      stripeState.duringRefundsList = async () => {
+        stripeState.duringRefundsList = undefined;
+        stripeState.refunds[pi.id!] = [{ ...refund, status: 'succeeded' }];
+        await handler.handle(refundUpdated, 1);
+      };
+
+      await handler.handle(chargeRefunded, 1);
+
+      const saved = await orderWithRows(order.id);
+      expect(saved.payments[0].refunds).toMatchObject([{ status: 'SUCCEEDED' }]);
+      expect(saved.status).toBe('REFUNDED');
+      const row = await prisma.stripeEvent.findUniqueOrThrow({ where: { id: chargeRefunded.id } });
+      expect(row.status).toBe('PROCESSED');
+      // charge.refunded's stale read, refund.updated's read, then charge.refunded's second read.
+      expect(stripeState.refundPages).toBe(3);
+    });
+
+    it('leaves an event RECONCILED when a repair settled it while its job was running', async () => {
+      const { pi } = await paidOrderWithPendingRefund();
+      const event = await storedEvent('charge.refunded', {
+        id: uid('ch_test'),
+        payment_intent: pi.id,
+      });
+      stripeState.duringRefundsList = async () => {
+        stripeState.duringRefundsList = undefined;
+        await prisma.stripeEvent.update({
+          where: { id: event.id },
+          data: { status: 'RECONCILED' },
+        });
+      };
+
+      await handler.handle(event, 1);
+
+      const row = await prisma.stripeEvent.findUniqueOrThrow({ where: { id: event.id } });
+      expect(row).toMatchObject({ status: 'RECONCILED', processedAt: null });
+    });
+
+    it('treats a read that started in the same millisecond as the saved one as older', async () => {
+      const { order, pi } = await paidOrderWithPendingRefund();
+      const [{ now }] = await prisma.$queryRaw<
+        { now: Date }[]
+      >`SELECT now()::timestamptz(3) AS now`;
+      await prisma.order.update({ where: { id: order.id }, data: { syncedAt: now } });
+      // The job's first read starts at exactly that time; later reads use the real clock.
+      vi.spyOn(databaseClock(), 'databaseNow').mockResolvedValueOnce(now);
+      const event = await storedEvent('charge.refunded', {
+        id: uid('ch_test'),
+        payment_intent: pi.id,
+      });
+
+      await handler.handle(event, 1);
+
+      expect(stripeState.refundPages).toBe(2);
+      const saved = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(saved.syncedAt!.getTime()).toBeGreaterThan(now.getTime());
+    });
+
+    it('saves a read that started one millisecond after the saved one at once', async () => {
+      const { order, pi } = await paidOrderWithPendingRefund();
+      const [{ now }] = await prisma.$queryRaw<
+        { now: Date }[]
+      >`SELECT now()::timestamptz(3) AS now`;
+      await prisma.order.update({ where: { id: order.id }, data: { syncedAt: now } });
+      const later = new Date(now.getTime() + 1);
+      vi.spyOn(databaseClock(), 'databaseNow').mockResolvedValueOnce(later);
+      const event = await storedEvent('charge.refunded', {
+        id: uid('ch_test'),
+        payment_intent: pi.id,
+      });
+
+      await handler.handle(event, 1);
+
+      expect(stripeState.refundPages).toBe(1);
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: order.id } })).syncedAt).toEqual(
+        later,
+      );
+    });
+
+    it("records the database's clock, not the app's, as the time of the read", async () => {
+      const { order, pi } = await paidOrderWithPendingRefund();
+      const event = await storedEvent('charge.refunded', {
+        id: uid('ch_test'),
+        payment_intent: pi.id,
+      });
+      // An app clock an hour ahead: a synced_at from it would make every later read look older.
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date(Date.now() + 3_600_000) });
+      try {
+        await handler.handle(event, 1);
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const [row] = await prisma.$queryRaw<{ drift: number }[]>`
+        SELECT abs(extract(epoch FROM now() - synced_at)) AS drift FROM orders WHERE id = ${order.id}::uuid`;
+      expect(Number(row.drift)).toBeLessThan(60);
+    });
+
+    it('gives up after 3 reads that are all older than the saved one, as a retryable error', async () => {
+      const { order, pi } = await paidOrderWithPendingRefund();
+      // A save from the future: every read of this job is older.
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { syncedAt: new Date(Date.now() + 3_600_000) },
+      });
+      const event = await storedEvent('charge.refunded', {
+        id: uid('ch_test'),
+        payment_intent: pi.id,
+      });
+
+      const error = await handler.handle(event, 1).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(PermanentProcessingError);
+      expect((error as Error).message).toMatch(/older than the one saved .* after 3 reads/);
+      expect(stripeState.refundPages).toBe(3);
+      // A saved read an hour in the future means the database clock went back; say so.
+      expect(Logger.prototype.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/synced_at of order .* is \d+ s ahead of the database clock/),
+      );
+      const saved = await orderWithRows(order.id);
+      expect(saved.payments[0].refunds).toHaveLength(0);
+      expect(saved.status).toBe('PAID');
+      expect((await prisma.stripeEvent.findUniqueOrThrow({ where: { id: event.id } })).status).toBe(
+        'PENDING',
+      );
+    });
+
+    it('applies to repairs too', async () => {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id);
+      const s = session(order.id, pi.id!);
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { syncedAt: new Date(Date.now() + 3_600_000) },
+      });
+
+      const error = await handler.reconcileSession(s.id!).catch((e: unknown) => e);
+
+      expect(error).not.toBeInstanceOf(PermanentProcessingError);
+      expect((error as Error).message).toMatch(/after 3 reads/);
+      expect((await orderWithRows(order.id)).payments).toHaveLength(0);
+    });
+  });
+
   describe('reconcileSession (repairs from reconciliation)', () => {
     /** A paid order with a payment and one refund, as the worker would have recorded it. */
     async function paidOrderWithRefund() {
@@ -425,6 +622,56 @@ describe('StripeEventHandler (e2e)', () => {
       expect((await status(otherPayment.id)).status).toBe('PENDING');
     });
 
+    it('leaves an event stored after its snapshot started PENDING, for its own job', async () => {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id);
+      const s = session(order.id, pi.id!);
+      const refund = {
+        id: uid('re_test'),
+        amount: 1000,
+        currency: 'usd',
+        status: 'pending' as const,
+        payment_intent: pi.id,
+      };
+      stripeState.refunds[pi.id!] = [refund];
+      // The refund succeeds while the repair is reading Stripe; its webhook event arrives mid-repair.
+      let late: { id: string } | undefined;
+      stripeState.duringRefundsList = async () => {
+        stripeState.duringRefundsList = undefined;
+        late = await storedEvent(
+          'refund.updated',
+          { id: refund.id, payment_intent: pi.id },
+          { late: true },
+        );
+      };
+
+      const settled = await handler.reconcileSession(s.id!);
+
+      expect(settled).not.toContain(late!.id);
+      expect((await prisma.stripeEvent.findUniqueOrThrow({ where: { id: late!.id } })).status).toBe(
+        'PENDING',
+      );
+    });
+
+    it('settles an event stored before the read started, not one stored in the same millisecond', async () => {
+      const order = await newOrder();
+      const pi = paymentIntent(order.id);
+      const s = session(order.id, pi.id!);
+      const sameMs = await storedEvent('payment_intent.canceled', { id: pi.id }, { late: true });
+      const before = await storedEvent('payment_intent.canceled', { id: pi.id }, { late: true });
+      const [{ receivedAt }] = await prisma.$queryRaw<{ receivedAt: Date }[]>`
+        SELECT received_at AS "receivedAt" FROM stripe_events WHERE id = ${sameMs.id}`;
+      // `before` one millisecond earlier than `sameMs`; the read starts exactly at `sameMs`.
+      await prisma.$executeRaw`
+        UPDATE stripe_events SET received_at = ${new Date(receivedAt.getTime() - 1)}
+        WHERE id = ${before.id}`;
+      vi.spyOn(databaseClock(), 'databaseNow').mockResolvedValueOnce(receivedAt);
+
+      const settled = await handler.reconcileSession(s.id!);
+
+      expect(settled).toEqual([before.id]);
+    });
+
     it('settles no event when the repair fails (one transaction)', async () => {
       const order = await newOrder();
       const pi = paymentIntent(order.id, { amount: 9900, amount_received: 9900 });
@@ -480,6 +727,19 @@ describe('StripeEventHandler (e2e)', () => {
     await expect(
       handler.handle(await storedEvent('checkout.session.completed', { id: s.id }), 1),
     ).rejects.toThrow(PermanentProcessingError);
+    const saved = await orderWithRows(order.id);
+    expect(saved.status).toBe('PENDING');
+    expect(saved.payments).toHaveLength(0);
+  });
+
+  it('fails permanently when a payment intent event charges a different amount than the order', async () => {
+    // A payment_intent.* event reads only the payment intent, so its own check is the only one.
+    const order = await newOrder();
+    const pi = paymentIntent(order.id, { amount: 9900, amount_received: 9900 });
+
+    await expect(
+      handler.handle(await storedEvent('payment_intent.canceled', { id: pi.id }), 1),
+    ).rejects.toThrow(/payment intent charges 9900 usd but order .* is 4900 usd/);
     const saved = await orderWithRows(order.id);
     expect(saved.status).toBe('PENDING');
     expect(saved.payments).toHaveLength(0);

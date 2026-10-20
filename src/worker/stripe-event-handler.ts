@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import Stripe from 'stripe';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -21,6 +21,11 @@ export interface StoredEvent {
 
 /** The current state of the Stripe objects behind one event or repair, fetched before the transaction. */
 interface Snapshot {
+  /**
+   * Database time just before the first Stripe call. Any change Stripe made before an event was
+   * stored is already in Stripe's answer, so events stored before this moment are covered.
+   */
+  startedAt: Date;
   orderId: string;
   session?: Stripe.Checkout.Session;
   paymentIntent?: Stripe.PaymentIntent;
@@ -34,6 +39,22 @@ const REFUND_PAGE_SIZE = 100;
 const MAX_REFUND_PAGES = 100;
 
 /**
+ * Reads of Stripe one job makes before giving up on getting a snapshot newer than the one already
+ * saved. Losing more than once means other jobs keep saving newer data, so BullMQ retries it later.
+ */
+const MAX_SNAPSHOT_READS = 3;
+
+/** Thrown inside the transaction (rolling it back) when a newer snapshot was saved meanwhile. */
+class StaleSnapshotError extends Error {}
+
+/**
+ * A saved read this far ahead of a new one can't come from a job still running: the database clock
+ * went back (or someone set `synced_at` by hand). Until the clock catches up, the order's reads all
+ * lose and its jobs fail, so it is logged.
+ */
+const CLOCK_WARNING_MS = 60_000;
+
+/**
  * Applies Stripe's current state to the database: fetches the latest objects from Stripe, then writes
  * the payment, refunds and order status in one transaction. Used for webhook events (which also mark
  * their `stripe_events` row PROCESSED in that transaction) and for reconciliation repairs (which have
@@ -41,6 +62,8 @@ const MAX_REFUND_PAGES = 100;
  */
 @Injectable()
 export class StripeEventHandler {
+  private readonly logger = new Logger(StripeEventHandler.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(STRIPE_CLIENT) private readonly stripe: Stripe,
@@ -56,8 +79,10 @@ export class StripeEventHandler {
    *   match, an object Stripe says doesn't exist); any other error is worth retrying.
    */
   async handle(event: StoredEvent, attempt: number): Promise<void> {
-    const snapshot = await this.fetchSnapshot(event);
-    await this.apply(snapshot, `event ${event.id}`, { id: event.id, attempt });
+    await this.readAndApply(() => this.fetchSnapshot(event), `event ${event.id}`, {
+      id: event.id,
+      attempt,
+    });
   }
 
   /**
@@ -72,29 +97,61 @@ export class StripeEventHandler {
    */
   async reconcileSession(sessionId: string): Promise<string[]> {
     const context = { job: 'reconciliation' };
-    const snapshot = await withStripeErrors(async (): Promise<Snapshot> => {
-      const session = await this.stripeCalls.run('checkout.sessions.retrieve', context, () =>
-        this.stripe.checkout.sessions.retrieve(sessionId, { expand: ['payment_intent'] }),
-      );
-      const paymentIntent =
-        typeof session.payment_intent === 'object' && session.payment_intent
-          ? session.payment_intent
-          : undefined;
-      return {
-        orderId: orderIdFrom(session.metadata, session.client_reference_id, `Session ${sessionId}`),
-        session,
-        paymentIntent,
-        // Refunds too, so a restored payment comes back with the right refunded total.
-        refunds: paymentIntent ? await this.listRefunds(paymentIntent.id, context) : undefined,
-      };
-    });
-    try {
-      return await this.apply(snapshot, `session ${sessionId}`);
-    } catch (error) {
-      if (error instanceof PermanentProcessingError) {
-        error.orderId ??= snapshot.orderId;
+    const read = () =>
+      withStripeErrors(async (): Promise<Omit<Snapshot, 'startedAt'>> => {
+        const session = await this.stripeCalls.run('checkout.sessions.retrieve', context, () =>
+          this.stripe.checkout.sessions.retrieve(sessionId, { expand: ['payment_intent'] }),
+        );
+        const paymentIntent =
+          typeof session.payment_intent === 'object' && session.payment_intent
+            ? session.payment_intent
+            : undefined;
+        return {
+          orderId: orderIdFrom(
+            session.metadata,
+            session.client_reference_id,
+            `Session ${sessionId}`,
+          ),
+          session,
+          paymentIntent,
+          // Refunds too, so a restored payment comes back with the right refunded total.
+          refunds: paymentIntent ? await this.listRefunds(paymentIntent.id, context) : undefined,
+        };
+      });
+    return this.readAndApply(read, `session ${sessionId}`);
+  }
+
+  /**
+   * Reads Stripe and saves the result, reading again when another job saved a snapshot that started
+   * reading Stripe later than this one. The lock alone isn't enough: it orders the saves, not the
+   * reads, so without this check an older read that saves last would overwrite newer data.
+   * @param read Fetches the Stripe objects.
+   * @throws Error (retryable) when every one of `MAX_SNAPSHOT_READS` reads was older than the saved
+   *   one; PermanentProcessingError (with the order ID, when known) as `apply` does.
+   */
+  private async readAndApply(
+    read: () => Promise<Omit<Snapshot, 'startedAt'>>,
+    source: string,
+    event?: { id: string; attempt: number },
+  ): Promise<string[]> {
+    for (let reads = 1; ; reads++) {
+      const startedAt = await this.databaseNow();
+      const snapshot = { startedAt, ...(await read()) };
+      try {
+        return await this.apply(snapshot, source, event);
+      } catch (error) {
+        if (error instanceof PermanentProcessingError) {
+          error.orderId ??= snapshot.orderId;
+        }
+        if (!(error instanceof StaleSnapshotError)) {
+          throw error;
+        }
+        if (reads >= MAX_SNAPSHOT_READS) {
+          throw new Error(
+            `Stripe snapshot for ${source} was older than the one saved for order ${snapshot.orderId} after ${reads} reads`,
+          );
+        }
       }
-      throw error;
     }
   }
 
@@ -118,6 +175,18 @@ export class StripeEventHandler {
         throw new PermanentProcessingError(`No order ${snapshot.orderId} for ${source}`);
       }
       const order = await tx.order.findUniqueOrThrow({ where: { id: snapshot.orderId } });
+      // Another job saved a snapshot that started reading Stripe at the same time or later: this one
+      // may hold older data, so it must not overwrite it. Equal times count as older, so of two reads
+      // in the same millisecond the second to save reads again rather than guessing which is newer.
+      if (order.syncedAt && snapshot.startedAt <= order.syncedAt) {
+        const aheadMs = order.syncedAt.getTime() - snapshot.startedAt.getTime();
+        if (aheadMs > CLOCK_WARNING_MS) {
+          this.logger.warn(
+            `synced_at of order ${order.id} is ${Math.round(aheadMs / 1000)} s ahead of the database clock; its reads can't be saved until the clock passes it`,
+          );
+        }
+        throw new StaleSnapshotError();
+      }
 
       if (snapshot.session) {
         checkMatchesOrder(
@@ -184,12 +253,14 @@ export class StripeEventHandler {
           status,
           // Fill in the session ID if saving it failed in stage 3's checkout request.
           stripeCheckoutSessionId: order.stripeCheckoutSessionId ?? snapshot.session?.id,
+          syncedAt: snapshot.startedAt,
         },
       });
 
       if (event) {
-        await tx.stripeEvent.update({
-          where: { id: event.id },
+        // A repair may have settled the event while this job read Stripe; RECONCILED then stays.
+        await tx.stripeEvent.updateMany({
+          where: { id: event.id, status: { in: ['PENDING', 'FAILED'] } },
           data: {
             status: 'PROCESSED',
             attempts: event.attempt,
@@ -202,13 +273,16 @@ export class StripeEventHandler {
 
       // A repair: settle the events about this payment that never got processed, so the history
       // doesn't keep showing them as stuck. Matched on the session or payment intent ID, or on the
-      // payment intent a charge or refund event points at. `last_error` and `attempts` stay as a
-      // record of what went wrong. The status condition matches the partial index
-      // stripe_events_unsettled_idx, so only the few unsettled rows are read.
+      // payment intent a charge or refund event points at. Only events stored before the snapshot
+      // started: a later one may describe a change the snapshot missed, so its own job handles it.
+      // `last_error` and `attempts` stay as a record of what went wrong. The status condition
+      // matches the partial index stripe_events_unsettled_idx, so only the few unsettled rows are
+      // read.
       const objectIds = [snapshot.session?.id, pi?.id].filter((id): id is string => Boolean(id));
       const settled = await tx.$queryRaw<{ id: string }[]>`
         UPDATE stripe_events SET status = 'RECONCILED'
         WHERE status <> 'PROCESSED' AND status <> 'RECONCILED'
+          AND received_at < ${snapshot.startedAt}
           AND (payload->'data'->'object'->>'id' = ANY(${objectIds})
             OR payload->'data'->'object'->>'payment_intent' = ${pi?.id ?? null})
         RETURNING id`;
@@ -216,8 +290,18 @@ export class StripeEventHandler {
     });
   }
 
+  /**
+   * The database's clock, not the app's: `received_at` is set by the database (a trigger), and the
+   * two can differ. Rounded to milliseconds like `received_at`, so an event stored after this moment never
+   * compares as earlier.
+   */
+  private async databaseNow(): Promise<Date> {
+    const [row] = await this.prisma.$queryRaw<{ now: Date }[]>`SELECT now()::timestamptz(3) AS now`;
+    return row.now;
+  }
+
   /** Fetches the current Stripe objects an event refers to. The event type only says what to fetch. */
-  private async fetchSnapshot(event: StoredEvent): Promise<Snapshot> {
+  private async fetchSnapshot(event: StoredEvent): Promise<Omit<Snapshot, 'startedAt'>> {
     const object = (event.payload as { data?: { object?: Record<string, unknown> } } | null)?.data
       ?.object;
     const objectId = typeof object?.id === 'string' ? object.id : undefined;

@@ -162,8 +162,10 @@ export class StripeEventsProcessor extends WorkerHost {
 
   /**
    * Saves the attempt count and the error on the event: `FAILED` when no retry will follow, otherwise
-   * still `PENDING`. If saving fails too (the database is the problem), that is logged and the original
-   * error still goes back to BullMQ.
+   * still `PENDING`. An event settled while this attempt ran (`RECONCILED` by a repair, or
+   * `PROCESSED`) is left as it is: that result is newer than this attempt's failure. If saving fails
+   * too (the database is the problem), that is logged and the original error still goes back to
+   * BullMQ.
    */
   private async recordFailure(
     eventId: string,
@@ -176,14 +178,19 @@ export class StripeEventsProcessor extends WorkerHost {
       `Event ${eventId} failed on attempt ${attempt}${final ? ' (giving up)' : ', will retry'}: ${message}`,
     );
     try {
-      await this.prisma.stripeEvent.update({
-        where: { id: eventId },
+      const { count } = await this.prisma.stripeEvent.updateMany({
+        where: { id: eventId, status: { in: ['PENDING', 'FAILED'] } },
         data: {
           attempts: attempt,
           lastError: message.slice(0, MAX_ERROR_LENGTH),
           status: final ? 'FAILED' : 'PENDING',
         },
       });
+      if (count === 0) {
+        this.logger.warn(
+          `Event ${eventId} was settled meanwhile (or no longer exists); its failure is not saved`,
+        );
+      }
     } catch (saveError) {
       this.logger.error(
         `Could not save the failure of event ${eventId}: ${saveError instanceof Error ? saveError.message : String(saveError)}`,

@@ -2,7 +2,7 @@ import { getQueueToken } from '@nestjs/bullmq';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { Queue } from 'bullmq';
 import {
-  STRIPE_EVENT_JOB_OPTIONS,
+  RECONCILIATION_QUEUE,
   STRIPE_EVENTS_QUEUE,
   type StripeEventJob,
 } from './../src/queue/queue.module.js';
@@ -27,8 +27,32 @@ describe('stripe-events queue (e2e)', () => {
     await app?.close();
   });
 
-  it('uses the retry and retention settings for every job', () => {
-    expect(queue.defaultJobOptions).toMatchObject(STRIPE_EVENT_JOB_OPTIONS);
+  // Checked by value, not against the constants that set them: a changed number must fail a test.
+  it('gives every job 5 attempts with exponential backoff from 10 s, keeping failed jobs', async () => {
+    const job = await queue.add('stripe-event', { eventId: `evt_test_${Date.now()}_opts` });
+
+    expect(job.opts).toMatchObject({
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 10_000 },
+      removeOnComplete: { age: 7 * 24 * 60 * 60 },
+      removeOnFail: false,
+    });
+  });
+
+  it('gives reconciliation runs 3 attempts with exponential backoff from 1 minute', async () => {
+    const reconciliation = app.get<Queue>(getQueueToken(RECONCILIATION_QUEUE));
+    try {
+      const job = await reconciliation.add('reconcile', {});
+
+      expect(job.opts).toMatchObject({
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 60_000 },
+        removeOnComplete: { age: 30 * 24 * 60 * 60 },
+        removeOnFail: false,
+      });
+    } finally {
+      await reconciliation.obliterate({ force: true });
+    }
   });
 
   it('keeps one job when the same event ID is added twice', async () => {

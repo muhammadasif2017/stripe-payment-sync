@@ -382,3 +382,105 @@ An independent review (read-only, no shared context) checked the repository befo
   - The top note now only says Stripe runs in test mode. A short "About this project" section before the license says it is a portfolio project built from a fictional client brief and wasn't delivered to a client.
   - The About description ends with "· portfolio project", and the release notes say "Portfolio project; Stripe test mode only".
 - **Commit email:** future commits use the GitHub noreply address (`git config --global user.email`). Earlier commits keep the previous address, because GitHub keeps every pull request's commits.
+
+
+## Stage 9: Race fixes (2026-10-19)
+
+A pre-release review of `main` ran three independent reviewers in parallel (code review, security audit, test coverage). None found anything critical, but two reviewers separately found the same race between reconciliation repairs and the worker, and the code review found a second one. Both can leave an order in the wrong state for good. Plan: `tasks/plan.md`.
+
+### Task 1: A repair settles only events stored before its snapshot
+
+- **The bug.** A repair reads the session, payment intent and refunds from Stripe, then, in its transaction, marks every unsettled event of that payment `RECONCILED`. An event stored *between* the read and the commit was marked too, although the repair never saw its change. Example: the repair reads a refund as `pending`; the refund succeeds and its `refund.updated` event is stored; the repair commits and marks that event `RECONCILED`; the worker skips it. The refund stays `PENDING` and the order `PAID`, and reconciliation never looks again because the payment is `SUCCEEDED`.
+- **Proved first.** A new e2e test stores a `refund.updated` event while the fake Stripe client is answering the repair's refund list. On the old code the repair returned that event as settled; the test failed with `expected [ 'evt_test_…_4' ] to not include 'evt_test_…_4'`.
+- **The fix.** Before its first Stripe call, every snapshot records the database's current time (`startedAt`). The repair's `UPDATE` only settles events with `received_at < startedAt`. An event stored before the read describes a change Stripe had already made, so the read includes it; a later one stays `PENDING` and its own job processes it.
+- **Database clock, not the app's.** The comparison must use one clock. The repair reads PostgreSQL's, so `received_at` must come from PostgreSQL too. Comparing times from two clocks reopens the race by the size of the drift.
+- **`received_at` was not set by the database.** The first version of this fix assumed it was (the column has `DEFAULT CURRENT_TIMESTAMP`). Its new test then failed once in a later run. Logging Prisma's queries showed why: `@default(now())` makes Prisma Client send its own value, taken from the app's clock, so the database default never ran. In that probe the app's clock was 8 ms behind the database's, and a late event could get a time earlier than the repair's start. The schema then said `@default(dbgenerated("CURRENT_TIMESTAMP"))`, and Prisma left the column out of the `INSERT`. That migration changed nothing in the database, because the default was already there. Task 2 replaced this with a trigger, and the review follow-ups deleted the migration.
+- **A test that can't be flaky.** Passing 15 runs in a row only shows the race is rarer. A new e2e test moves the app's clock to the year 2000 (`vi.useFakeTimers({ toFake: ['Date'] })`), stores an event and checks `received_at` is within a minute of the database's `now()`. With `@default(now())` put back it failed (`expected 845748261.403506 to be less than 60`); with the fix it passes. The time is read with `SELECT now()::timestamptz(3)`: rounded to milliseconds exactly like `received_at`, so an event stored after the read can never round to an earlier time.
+- The existing settling test (events stored before the repair become `RECONCILED`) still passes unchanged.
+- **Plan change before Task 2.** The first plan fixed the second race with "never move a status backwards". Checking Stripe's docs showed that a refund needing the customer's bank details can go from `succeeded` back to `requires_action`. That can't happen with cards, the only payment method here, but the rule would quietly break if another method were added. Task 2 now compares read times instead ("the newest read wins"), reusing `startedAt`.
+- Also: stage 8's plan and tasks archived, `.serena/` (a local code-navigation tool's state) git-ignored.
+- 156 unit tests and 98 e2e tests pass; lint, type check and build are clean.
+
+### Task 2: The newest read from Stripe wins
+
+- **The bug.** The order-row lock makes two jobs for one order save one after the other, but not in the order they read Stripe. An older read that saves last overwrote newer data. Example: `charge.refunded` reads a refund as `pending`; meanwhile the refund succeeds and the `refund.updated` job reads and saves that; then `charge.refunded` saves `pending` over it. The order goes back to `PAID`, and reconciliation never repairs it.
+- **Proved first.** A new e2e test does exactly that, using a hook in the fake Stripe client that runs the second job between the first job's read and its save. On the old code the refund ended `PENDING` (`expected [ { …(8) } ] to match object [ { status: 'SUCCEEDED' } ]`).
+- **The fix.** New column `orders.synced_at`: the `startedAt` (Task 1's database time before the first Stripe call) of the last snapshot saved for the order. Under the order lock, a snapshot whose `startedAt` is not later than `synced_at` is not saved: the transaction rolls back and the job reads Stripe again. After 3 reads that all lose, it fails with a retryable error and BullMQ tries later. Repairs follow the same rule, because they write the same rows.
+- **Why it's correct.** Every change in Stripe is followed by a webhook, and that event's job starts reading after the change. Whatever is saved last has the latest `startedAt`, so it read Stripe after every change whose job has run. A rejected read costs one more Stripe read, never wrong data.
+- **Equal times count as older.** `startedAt` is rounded to milliseconds, so two reads can tie. Rather than guess which is newer, the second to save reads again.
+- **Why not "never move a status backwards"** (the first plan): it depends on which status changes Stripe allows. Stripe's refund docs show a refund that needs the customer's bank details can go from `succeeded` back to `requires_action`. Cards can't do that, but the rule would quietly break with another payment method. Comparing read times doesn't depend on Stripe's state machine.
+- **Why not read Stripe inside the lock:** that holds the order lock and a database transaction open during network calls.
+- **`received_at` moved to a trigger.** Creating this task's migration, Prisma also wanted to set `received_at`'s default again. It compares `dbgenerated(...)` defaults with the database and always sees a difference (checked with `prisma migrate diff` for both `CURRENT_TIMESTAMP` and `now()`), so that line would have reappeared in every future migration. Instead, the schema is back to `@default(now())`, and a `BEFORE INSERT` trigger sets `received_at = now()` whatever value an insert sends. Prisma doesn't track triggers, so `migrate diff` is now empty. It also covers inserts from anywhere, not only Prisma Client.
+- **Proved.** Dropping the trigger in `payments_test` made the fake-clock test fail again (`expected 845749005.912728 to be less than 60`); restoring it made it pass. Disabling the `synced_at` check made all three new tests fail: the overtaken read, giving up after 3 stale reads, and the same rule for repairs.
+- **Something to watch.** A `prisma migrate dev` stopped earlier in this stage left its process running, holding Prisma's migration lock (`P1002 ... pg_advisory_lock`). It was stopped by process ID once identified.
+
+### Task 3: Recording a failure does not undo a settled event
+
+- **The bug.** When an attempt fails, the processor saves the error and sets the event to `PENDING` (will retry) or `FAILED` (giving up), whatever its status is by then. If a reconciliation repair settled the event (`RECONCILED`) while the attempt was running, the failure overwrote that: the event showed `FAILED` for a payment that was fine, or went back to `PENDING` and was processed again.
+- **Proved first.** A new worker e2e test makes the job's transaction mark its own event `RECONCILED` and then fail with a permanent error. On the old code the event ended `FAILED` (`expected { …(9) } to match object { status: 'RECONCILED', …(2) }`).
+- **The fix.** `recordFailure` uses `updateMany` limited to events still `PENDING` or `FAILED`, so the check and the write are one statement and nothing can slip in between. When no row matches, it logs `Event … was settled meanwhile (or no longer exists); its failure is not saved`. The original error still goes back to BullMQ, which decides about retries as before; a retry then sees `RECONCILED` and skips the event.
+
+### Task 4: The schedule guard also catches a trailing slash and other letter case
+
+- **The bug.** The guard that refuses dashboard schedule edits matched Bull Board's routes with case-sensitive patterns ending at `$`. Bull Board's Express router (Express 5.2.1, default options) is neither strict nor case-sensitive, so `.../job-schedulers/daily-reconciliation/` and `/API/queues/...` reached the edit and remove handlers. Only a logged-in admin can send these, so it is not an authorization hole, but "remove" would stop the daily reconciliation until the worker restarts.
+- **Checked against real routing.** A small Express 5.2.1 app with the same route showed which variants reach it: a trailing slash and other letter case do (200); percent-encoded letters (`job-scheduler%73`) and a double slash don't (404). So only the first two needed handling.
+- **Proved first.** Four new unit cases (trailing slash and letter case, for edit and remove) failed on the old patterns. A new e2e test sends the same requests through the real app: on the old guard the trailing-slash edit got `204 No Content`, meaning it really changed the scheduler in the test Redis.
+- **The fix.** Both patterns accept an optional trailing slash and ignore case (`\/?$/i`). "Run now", with or without a trailing slash, is still allowed.
+- Also: rewrapped a JSDoc line over 100 characters from Task 3.
+
+### Task 5: Tests for checks nothing proved
+
+No code changes. The pre-release test review found checks that no test would notice being removed. Each new test was shown to fail by breaking the code it covers, then the code was restored.
+
+| Test | Broken on purpose | Result while broken |
+| --- | --- | --- |
+| A `payment_intent.canceled` event whose payment intent charges 9900 against a 4900 order fails permanently and saves nothing | Removed the payment intent's `checkMatchesOrder` call | `promise resolved "undefined" instead of rejecting`: the payment would have been saved |
+| Reconciliation repairs a paid session whose only payment row is a `FAILED` attempt (a declined card, then a success whose event was lost) | Dropped `status: 'SUCCEEDED'` from reconciliation's payment lookup | The session counted as already recorded, so it would never be repaired |
+| Stripe event jobs get 5 attempts, exponential backoff from 10 s, completed jobs kept 7 days, failed jobs kept; reconciliation runs get 3 attempts from 1 minute, kept 30 days | Set `attempts: 1` in both | Both tests failed |
+| The login limit applies only to the dashboard, also when the test runs alone | Mounted the limiter on every route | New test failed (`got 429 "Too Many Requests"` on `/health`); the old test still passed alone |
+
+- **Why the old queue test couldn't fail.** It compared the queue's options with the same constant that set them, so changing a number changed both sides. The new tests add a job and check the numbers themselves.
+- **Why the old login-limit test only worked in order.** It checked `/health` answered 200, which only means something once the IP is locked out, and only the test before it did that. The test now locks the IP out itself.
+
+### Review follow-ups
+
+A second `/ship` review (code, security, tests) on this branch's diff approved the race fixes, and found two blockers and several smaller gaps. Each fix below was shown to fail first.
+
+**Blocker: the schedule guard could still be bypassed with `#` or `\`.**
+- The guard compared `req.originalUrl` (cut at `?`) with patterns. Express's router reads the path through `parseurl`, which, when the URL contains `#`, uses Node's `url.parse`: it drops everything from `#` and turns `\` into `/`. So `PUT .../daily-reconciliation/remove#` failed the guard's pattern but still reached Bull Board's remove handler. The security review proved it with requests over a raw socket (HTTP clients drop fragments before sending), and the same probe reproduced it here (200 from the handler).
+- Task 4's own check had only tried a trailing slash, letter case, percent-encoded letters and double slashes; it never tried `#`. Patching the patterns again would only invite the next variant.
+- **Fix:** the guard is now an Express `Router` with Bull Board's own route paths. It runs just before Bull Board's router on the same request, so the two can't read a path differently. It also refuses emptying or obliterating the `reconciliation` queue, which deletes the scheduler or its next run (the review found that too); the same actions on other queues stay allowed.
+- **Proof:** new unit cases (`#`, `\`, empty, obliterate) and an e2e test that sends the requests over a raw socket. Against the old guard, `remove#` got `204`, removed the scheduler in the test Redis, and the test after it failed; with the new guard all get 403.
+
+**Blocker: a test that could fail at random.** Repairs settle only events stored strictly before the read started, both times rounded to the millisecond. The test "marks the payment's unsettled events RECONCILED" stores events a few queries before the repair, so on a fast machine one could land in the same millisecond and stay `PENDING`. The handler tests now move stored events 1 s back (after the insert, because the trigger sets the time on insert only); the one event meant to arrive mid-repair keeps the database's time.
+
+**Tests the review found missing.** Each was shown to fail by changing the code:
+
+| Test | Code changed on purpose | Result |
+| --- | --- | --- |
+| The read's time comes from the database clock (app clock faked an hour ahead) | `databaseNow()` returning the app's `new Date()` | Failed |
+| A read starting in the same millisecond as the saved one counts as older and reads again | `<=` changed to `<` | Failed |
+| A read one millisecond later saves at once | — (pins the other side of the rule) | — |
+| A repair settles an event stored 1 ms before its read, not one stored in the same millisecond | `<` changed to `<=` | Failed |
+| The overtaken job reads Stripe exactly 3 times in total | — (the 5 ms sleep it had was removed: equal times already count as older) | — |
+
+**Smaller hardening from the review.**
+- **A clock that went back is logged.** If an order's `synced_at` is more than 60 s ahead of a new read, no running job can have saved it: the database clock stepped back, or someone set the column by hand. Until the clock passes it, every read for that order loses and its jobs fail, so the handler now logs `synced_at of order … is N s ahead of the database clock`. The "gives up after 3 reads" test checks the warning.
+- **A successful save keeps `RECONCILED`.** Task 3 stopped a failing attempt from overwriting an event a repair had settled. The success path still set `PROCESSED` over `RECONCILED`; harmless, but inconsistent. It now updates only `PENDING` or `FAILED` events. The new test (a repair settles the event while its job reads Stripe) failed before the change.
+- **The trigger overrides an explicit value too.** A new test inserts `received_at = 2000-01-01` itself and checks the stored time is the database's.
+
+**Migrations rewritten before merge.** `main` never had this branch's migrations, so they were redone cleanly instead of being left as history:
+- Deleted `20261019175331_received_at_set_by_database`: it changed nothing in the database, and its comment described the `dbgenerated` default that Task 2 dropped.
+- `20261019181444_order_synced_at` now only adds the column.
+- The trigger moved to its own migration, `20261019181445_stripe_events_received_at_trigger`, and its function got `SET search_path = pg_catalog` (security review: the function can only ever call `pg_catalog.now()`).
+- **Databases:** in `payments_test`, the trigger, function and column were dropped and the two old rows removed from `_prisma_migrations`; `prisma migrate deploy` (the e2e global setup) then applied both new migrations from scratch. In `payments` (development), the column and its values were kept: the old rows were removed, the column migration marked applied with `prisma migrate resolve --applied`, and the trigger migration applied with `migrate deploy`. `migrate status` is up to date and `migrate diff` against the schema is empty. CI applies all migrations to an empty database on every run.
+- Proved once more: with the trigger dropped in `payments_test`, both trigger tests failed; recreated, both passed.
+
+**Assumptions now written down** (README known limits, and here):
+- **The database clock doesn't go back.** Both time checks use it. If it steps back, orders synced just before keep a `synced_at` in the future and their jobs fail until the clock passes it; the warning above names the order, and clearing `synced_at` releases it.
+- **Stripe's `retrieve` and `list` calls show a change as soon as its webhook is sent.** Stripe's Search docs say the list APIs "aren't subject to the availability delays" of Search, and that Search must not be used for read-after-write flows. This code uses only `retrieve` and `list`; it must never move to Search.
+- **Restores.** `pg_restore` runs triggers, so restoring `stripe_events` without `--disable-triggers` would set every `received_at` to the restore time.
+
+**Accepted, not fixed:**
+- **An event can lose to newer reads too often.** Each attempt reads Stripe up to 3 times; 5 attempts with backoff span a few minutes. An event whose reads keep losing for that long (a sustained burst of events for one order) ends `FAILED`, and a refund change in it isn't repaired by reconciliation, which only looks for missing payments. Very unlikely for one course order; the failed job stays in the dashboard, where it can be retried.
+- **A repair that runs out of reads this way is only logged,** not recorded in `reconciliation_issues`: issues are for sessions that can never be repaired, and the next daily run tries again.

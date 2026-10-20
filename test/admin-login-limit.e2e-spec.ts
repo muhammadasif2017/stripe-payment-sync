@@ -48,6 +48,13 @@ describe('Dashboard login rate limit (e2e)', () => {
   });
 
   it('limits only the dashboard', async () => {
+    // Locks the IP out itself, so it means something when run alone. Once an earlier test has
+    // locked it out, the rest of these answers are already 429.
+    for (let i = 0; i < MAX_FAILED_LOGINS; i++) {
+      expect([401, 429]).toContain((await dashboard('wrong-password-123')).status);
+    }
+    await dashboard('e2e-dashboard-password').expect(429);
+
     await request(app.getHttpServer()).get('/health').expect(200);
   });
 });

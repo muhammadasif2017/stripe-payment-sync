@@ -285,3 +285,44 @@ By doing it: a fresh clone into an empty folder, following only the README's Doc
 **Why does the image pin npm?**
 The lockfile was written by npm 11; the Node 22.15 image ships npm 10, which resolves one optional peer dependency differently and refuses the lockfile with "Missing: typescript@5.9.3". Pinning npm 11.14.0 in the Dockerfile, in CI and in `packageManager` makes every install use the same resolver.
 
+
+## Stage 9: Race fixes
+
+**How did you find the race conditions?**
+A pre-release review with three independent reviewers (code, security, tests), each with no shared context. Two of them found the same repair race on their own, which made it worth taking seriously. Every bug was then proved with a test that failed on the old code before anything was fixed.
+
+**What was the repair race?**
+A repair reads Stripe first, then writes in a transaction, and in that transaction it marked every unsettled event of the payment as settled. An event that arrived between the read and the write was marked too, even though the read never saw its change, and the worker then skipped it. A refund could stay pending forever. The fix: record the time just before the read and only settle events stored before it. Anything stored before the read describes a change the read already includes.
+
+**Why use the database's clock?**
+Because two clocks drift, and any drift reopens the race. Both times now come from PostgreSQL: the repair reads `now()`, and the event's `received_at` is the column default. The repair's time is rounded to milliseconds the same way as the column, so rounding can't make a later event look earlier.
+
+**What went wrong while fixing it?**
+I assumed the database set `received_at`, because the column has a default. A test failed once in about twenty runs. Logging Prisma's SQL showed Prisma Client sends its own value for `@default(now())`, from the app's clock, so the database default never ran. The fix is a `BEFORE INSERT` trigger that sets `received_at = now()` whatever an insert sends. (A first fix, `@default(dbgenerated(...))`, worked but made Prisma see a schema difference on every future migration.) To make the bug impossible to miss, a test moves the app's clock to the year 2000 and checks the stored time still matches the database. Lesson: a flaky test is a bug report; find the cause before rerunning.
+
+**Did you change your plan after starting?**
+Yes. The first fix for the second race was "never move a status backwards", based on which status changes I believed Stripe allows. When asked to justify it, I checked Stripe's docs: some refunds can go from `succeeded` back to `requires_action`. Not possible with cards, but the rule would silently break with another payment method. So the fix became "the newest read wins", which doesn't depend on Stripe's state machine. Lesson: a design that rests on facts about someone else's system should cite their docs, not memory.
+
+**What was the second race, and why "the newest read wins"?**
+Jobs read Stripe outside the transaction, then lock the order and save. The lock orders the saves, not the reads, so an older read could save last and overwrite newer data, for example putting a refund back to pending. Each order now remembers when the last saved snapshot started reading Stripe (`synced_at`). A job whose read started earlier, or at the same millisecond, doesn't save; it reads again, up to 3 times, then lets BullMQ retry. It's correct because every Stripe change is followed by an event whose job reads after it, and the last save is always the latest read.
+
+**Why not just check that statuses only move forward?**
+That was the first plan. It rests on knowing every status change Stripe allows, and Stripe's docs show some refunds can go from succeeded back to requires_action. Comparing read times works whatever Stripe's rules are.
+
+**Why not lock first and read Stripe inside the transaction?**
+Then a database transaction and a row lock stay open during network calls to Stripe, which can take seconds. Other jobs for that order wait, and slow Stripe calls turn into database pressure.
+
+**Why `updateMany` with a status condition instead of reading the status first?**
+Reading, checking and then writing leaves a gap where a repair can commit in between. Putting the condition in the `UPDATE` itself (`WHERE id = … AND status IN ('PENDING','FAILED')`) makes the check and the write one atomic statement. The number of rows changed tells the code whether it happened.
+
+**How was the dashboard's schedule guard bypassed, and how did you fix it?**
+It compared the URL with exact patterns, but the router behind it treats `/x` and `/x/` as the same route and ignores letter case. So `.../job-schedulers/daily-reconciliation/` slipped past the guard and still reached the handler. The patterns now allow both. The lesson: a path check in middleware must match the way the router matches, so I tested which variants the router actually accepts instead of guessing.
+
+**How do you know a test actually tests something?**
+Break the code it covers and watch it fail. In this project two old tests passed whatever the code did: one compared the queue's retry settings with the same constant that set them, and one only meant something after the previous test had run. Both were rewritten, and every new test in stage 9 was shown to fail on broken code before it counted.
+
+**The fix for the guard bypass was itself bypassed. What did you learn?**
+The first fix patched the URL patterns for the variants I had tested: a trailing slash and letter case. A second review found that a `#` fragment or a backslash also slipped through, because Express parses the URL differently from the raw text the guard checked. Rather than patch the patterns again, the guard became an Express `Router` with Bull Board's own route paths, so it reads every path exactly as the dashboard's router does. When a check has to agree with another component, use that component's own logic instead of imitating it.
+
+**What does this design assume?**
+That the database clock doesn't go back, and that Stripe's `retrieve` and `list` calls show a change as soon as its webhook is sent (Stripe's docs promise this for list APIs, not for Search). Both are written down, and a clock that did go back is logged with the affected order.

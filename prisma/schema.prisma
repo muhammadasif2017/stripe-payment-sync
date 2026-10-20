@@ -39,6 +39,9 @@ model StripeEvent {
   lastError       String?           @map("last_error")
   /// When Stripe created the event (event.created); events can arrive out of order.
   stripeCreatedAt DateTime          @map("stripe_created_at") @db.Timestamptz(3)
+  /// Always the database's clock: Prisma fills `now()` from the app's clock, so a trigger
+  /// (migration 20261019181445_stripe_events_received_at_trigger) overwrites it on insert. Repairs
+  /// compare it with the database's clock to know which events their Stripe snapshot covers.
   receivedAt      DateTime          @default(now()) @map("received_at") @db.Timestamptz(3)
   processedAt     DateTime?         @map("processed_at") @db.Timestamptz(3)
 
@@ -90,6 +93,9 @@ model Order {
   customerEmail           String?     @map("customer_email")
   /// Unique so a repeated checkout.session.completed event finds the same order.
   stripeCheckoutSessionId String?     @unique @map("stripe_checkout_session_id")
+  /// When the last saved Stripe snapshot for this order started reading Stripe (database clock). A job
+  /// whose read started earlier must not overwrite it, so it reads Stripe again. Null until the first.
+  syncedAt                DateTime?   @map("synced_at") @db.Timestamptz(3)
   createdAt               DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt               DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
   payments                Payment[]

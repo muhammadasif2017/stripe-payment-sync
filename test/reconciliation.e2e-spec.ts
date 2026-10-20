@@ -216,6 +216,26 @@ describe('Reconciliation run (e2e)', () => {
     expect((await queuedRepairs()).map((job) => job.id)).toEqual([`reconcile-${stuck.id}-4000000`]);
   });
 
+  it('repairs a paid session whose only recorded payment is a FAILED attempt', async () => {
+    // A declined card first, then a successful payment whose event was lost: the row on file is the
+    // failed attempt, which must not count as the payment being recorded.
+    const session = await paidSession(false);
+    await prisma.payment.create({
+      data: {
+        orderId: session.metadata.order_id,
+        stripePaymentIntentId: session.payment_intent,
+        amount: 4900,
+        currency: 'usd',
+        status: 'FAILED',
+      },
+    });
+
+    const summary = await service.run();
+
+    expect(summary).toMatchObject({ missing: 1, alreadyRecorded: 0 });
+    expect((await queuedRepairs()).map((job) => job.data)).toEqual([{ sessionId: session.id }]);
+  });
+
   it('queues nothing when every payment is recorded', async () => {
     await paidSession(true);
 
