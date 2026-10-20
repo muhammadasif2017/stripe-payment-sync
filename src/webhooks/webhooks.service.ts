@@ -6,9 +6,14 @@ import Stripe from 'stripe';
 import type { Env } from '../config/env.validation.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { STRIPE_EVENT_JOB, STRIPE_EVENTS_QUEUE, type StripeEventJob } from '../queue/queue.module.js';
+import {
+  STRIPE_EVENT_JOB,
+  STRIPE_EVENTS_QUEUE,
+  type StripeEventJob,
+} from '../queue/queue.module.js';
 import { STRIPE_CLIENT } from '../stripe/stripe.module.js';
 import { isHandledEventType } from './handled-events.js';
+import { storedPayload } from './stored-payload.js';
 
 /** What happened to a verified event. */
 export type RecordResult = 'stored' | 'duplicate' | 'ignored';
@@ -85,7 +90,7 @@ export class WebhooksService {
         data: {
           id: event.id,
           type: event.type,
-          payload: event as unknown as Prisma.InputJsonObject,
+          payload: storedPayload(event),
           stripeCreatedAt: new Date(event.created * 1000),
         },
       });
@@ -100,7 +105,9 @@ export class WebhooksService {
     // BullMQ ignores the add if a job with this ID already exists.
     await this.queue.add(STRIPE_EVENT_JOB, { eventId: event.id }, { jobId: event.id });
 
-    this.logger.log(`${result === 'stored' ? 'Stored' : 'Duplicate'} ${event.type} event ${event.id}`);
+    this.logger.log(
+      `${result === 'stored' ? 'Stored' : 'Duplicate'} ${event.type} event ${event.id}`,
+    );
     return result;
   }
 }

@@ -38,10 +38,10 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 ## Task 6: Trimmed payloads (L-7)
 
-- [ ] Only `id`, `type`, `created`, `livemode`, `api_version` and `data.object` `{id, object, payment_intent}` stored
-- [ ] Expanded `payment_intent` stored as its ID
+- [x] Only `id`, `type`, `created`, `livemode`, `api_version` and `data.object` `{id, object, payment_intent}` stored
+- [x] Expanded `payment_intent` stored as its ID
 - [ ] Existing rows trimmed by a migration (decision 2); user confirms before it runs on `payments`
-- [ ] Unit test of trimming; e2e webhook with customer details stored without them and still processed
+- [x] Unit test of trimming; e2e webhook with customer details stored without them and still processed
 
 ## Task 7: Passwords (L-5)
 

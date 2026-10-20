@@ -361,3 +361,9 @@ The event is stored in PostgreSQL before the job is added, so the event itself i
 
 **Why check for the job before adding it, if BullMQ ignores a duplicate job ID anyway?**
 For the count and the log line. The add alone would be safe, but the run's summary should say how many events were really lost, and each one gets a warning naming it. The test also proves the check matters: without it, the summary counted an event whose job was only delayed.
+
+**Why not keep the whole Stripe event "for debugging"?**
+Because the worker never trusts it: it reads the event's object ID, fetches the current object from Stripe, and saves that. The rest of the event was only a copy of customer data (email, name, billing address) kept forever with no use and no retention rule. Now `stripe_events.payload` keeps the event's ID, type, time and API version, plus the object's ID, type and payment intent ID, the only fields the worker and the repair SQL read. Data you don't store can't leak. For debugging, Stripe keeps the full event retrievable through its Events API for 30 days (Stripe's API reference).
+
+**How did you remove the data already stored?**
+A migration rewrites every existing row to the same shape, with the same rules as new events (an expanded payment intent becomes its ID). It can't be undone, so it was tried first inside a transaction on sample rows in the test database and rolled back, and the development database only got it after an explicit yes.

@@ -6,6 +6,7 @@ import type { Env } from '../config/env.validation.js';
 import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { StripeEventJob } from '../queue/queue.module.js';
+import { storedPayload } from './stored-payload.js';
 import { WebhooksService } from './webhooks.service.js';
 
 const SECRET = 'whsec_unit_test';
@@ -85,7 +86,7 @@ describe('WebhooksService', () => {
         data: {
           id: 'evt_unit_1',
           type: 'checkout.session.completed',
-          payload: event(),
+          payload: storedPayload(event()),
           stripeCreatedAt: new Date(1_760_000_000 * 1000),
         },
       });

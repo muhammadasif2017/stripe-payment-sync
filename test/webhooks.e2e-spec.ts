@@ -101,6 +101,33 @@ describe('POST /webhooks/stripe (e2e)', () => {
   });
 
   describe('storing and queuing', () => {
+    it("stores only the IDs the worker reads, never the customer's details", async () => {
+      const payload = newEvent({
+        data: {
+          object: {
+            id: 'cs_test_with_customer',
+            object: 'checkout.session',
+            payment_intent: 'pi_test_with_customer',
+            customer_details: { email: 'jane@example.com', name: 'Jane Doe' },
+            customer_email: 'jane@example.com',
+          },
+        },
+      });
+      const id = idOf(payload);
+
+      await post(payload, signPayload(payload)).expect(200);
+
+      const row = await prisma.stripeEvent.findUniqueOrThrow({ where: { id } });
+      expect((row.payload as { data: unknown }).data).toEqual({
+        object: {
+          id: 'cs_test_with_customer',
+          object: 'checkout.session',
+          payment_intent: 'pi_test_with_customer',
+        },
+      });
+      expect(JSON.stringify(row.payload)).not.toContain('jane');
+    });
+
     it('stores a handled event as PENDING and queues one job with the event ID', async () => {
       const payload = newEvent();
       const id = idOf(payload);
@@ -113,6 +140,7 @@ describe('POST /webhooks/stripe (e2e)', () => {
         status: 'PENDING',
         attempts: 0,
       });
+      // fakeEventPayload's object holds only the fields that are kept.
       expect(row.payload).toEqual(JSON.parse(payload));
       const { created } = JSON.parse(payload) as { created: number };
       expect(row.stripeCreatedAt.getTime()).toBe(created * 1000);
