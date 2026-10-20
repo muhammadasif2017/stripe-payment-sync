@@ -75,7 +75,7 @@ The daily reconciliation is a BullMQ job scheduler, not `@nestjs/schedule` (an i
 
 ## `express-rate-limit` 8.7.0
 
-The standard rate limiter for Express. It limits failed dashboard logins to 10 per 15 minutes per IP, counting only 401 responses. It needs no store for one API process; with several, its Redis store would share the counts. Pinned exactly, like the other packages that guard access.
+The standard rate limiter for Express. It limits failed dashboard logins to 10 per 15 minutes per IP, counting only 401 responses, and `POST /checkout` to 10 per minute per IP, counting every request (stage 10). It needs no store for one API process; with several, its Redis store would share the counts. Pinned exactly, like the other packages that guard access.
 
 ## Docker (multi-stage) and Docker Compose profiles
 

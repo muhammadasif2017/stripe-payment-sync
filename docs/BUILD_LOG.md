@@ -484,3 +484,12 @@ A second `/ship` review (code, security, tests) on this branch's diff approved t
 **Accepted, not fixed:**
 - **An event can lose to newer reads too often.** Each attempt reads Stripe up to 3 times; 5 attempts with backoff span a few minutes. An event whose reads keep losing for that long (a sustained burst of events for one order) ends `FAILED`, and a refund change in it isn't repaired by reconciliation, which only looks for missing payments. Very unlikely for one course order; the failed job stays in the dashboard, where it can be retried.
 - **A repair that runs out of reads this way is only logged,** not recorded in `reconciliation_issues`: issues are for sessions that can never be repaired, and the next daily run tries again.
+
+## Stage 10: Hardening (2026-10-20)
+
+The stage 9 security audit's remaining findings (two medium, six low) and the two backlog items found with it. Plan, decisions and sources: `tasks/plan.md`. Each fix was proved with a test that fails without it.
+
+- **Task 1: Rate limit on `POST /checkout` (M-1).** Each checkout writes an order and calls Stripe, and the worker shares the account's Stripe rate limit, so a flood of checkouts could make real events fail.
+  - `src/checkout/checkout-limit.ts` (new): `express-rate-limit`, 10 requests per minute per IP, every request counted (a rejected one still costs a request). 429 with `Too many checkouts, try again later`, logged with the IP. In memory, like the login limit.
+  - `src/checkout/checkout.module.ts`: applied as Nest middleware to `POST /checkout` only, so the page's `GET /checkout/courses` is never limited and test apps built from `AppModule` include it.
+  - `test/checkout-limit.e2e-spec.ts` (new, own app so its count doesn't reach `checkout.e2e-spec.ts`, which sends 7 checkouts): 10 invalid checkouts get 400, the 11th gets 429 with the `RateLimit-Policy` header, the course list still answers 200 and Stripe is never called. With the middleware replaced by a pass-through, the test failed (`expected 429, got 400`).

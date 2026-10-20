@@ -4,9 +4,9 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 ## Task 1: Rate limit on `POST /checkout` (M-1)
 
-- [ ] 10 requests per minute per IP on `POST /checkout`; 429 with a JSON message, logged with the IP
-- [ ] `GET /checkout/courses` is not limited
-- [ ] Own e2e file and app; fails with the middleware removed
+- [x] 10 requests per minute per IP on `POST /checkout`; 429 with a JSON message, logged with the IP
+- [x] `GET /checkout/courses` is not limited
+- [x] Own e2e file and app; fails with the middleware removed
 
 ## Task 2: `TRUST_PROXY` and `HOST` (L-2, L-4)
 

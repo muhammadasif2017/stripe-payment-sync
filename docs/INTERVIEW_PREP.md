@@ -326,3 +326,14 @@ The first fix patched the URL patterns for the variants I had tested: a trailing
 
 **What does this design assume?**
 That the database clock doesn't go back, and that Stripe's `retrieve` and `list` calls show a change as soon as its webhook is sent (Stripe's docs promise this for list APIs, not for Search). Both are written down, and a clock that did go back is logged with the affected order.
+
+## Stage 10: Hardening
+
+**Why rate-limit the checkout endpoint? It's public on purpose.**
+Each request writes an order row and calls Stripe. Without a limit, a script could fill the `orders` table and, worse, use up the Stripe account's API rate limit, which the worker shares. Then real payment events start failing with Stripe 429s. So `POST /checkout` allows 10 requests per minute per IP. The course list (`GET /checkout/courses`) isn't limited, because the page reads it on every visit.
+
+**Why every request, not only failed ones like the login limit?**
+For logins, failures are the attack: password guesses. For checkout, every request costs a database write and a Stripe call, so every request counts, including rejected ones.
+
+**Why apply it in the Nest module instead of `main.ts`?**
+The e2e tests build the app from `AppModule` without running `main.ts`. Middleware registered in `CheckoutModule` (`configure()` with `forRoutes`) is part of the app the tests build, so the tests cover the real setup.

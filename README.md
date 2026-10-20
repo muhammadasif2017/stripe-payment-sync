@@ -344,7 +344,7 @@ The payment row is back (with a new row ID), and the order status is recomputed.
 | --- | --- | --- | --- |
 | `GET` | `/health` | | `200 {"status":"ok"}`, or `503` when PostgreSQL is unreachable |
 | `GET` | `/checkout/courses` | | Courses with server-side prices |
-| `POST` | `/checkout` | `{ "courseId": "nestjs-fundamentals", "email"?: "..." }` | `201 { orderId, checkoutUrl }`; `400` for an unknown course or any extra field; `502` (generic message) when Stripe fails |
+| `POST` | `/checkout` | `{ "courseId": "nestjs-fundamentals", "email"?: "..." }` | `201 { orderId, checkoutUrl }`; `400` for an unknown course or any extra field; `429` after 10 requests in a minute from one IP; `502` (generic message) when Stripe fails |
 | `POST` | `/webhooks/stripe` | Stripe event, `Stripe-Signature` header | `200 {"received":true}`; `400` for a bad signature or live mode; `500` so Stripe retries |
 | `GET` | `/`, `/success.html`, `/cancel.html` | | Minimal checkout pages |
 | `GET` | `/admin/queues` | | Bull Board queue dashboard; HTTP Basic auth on every path below it (`401` without it); changes sent from another site get `403` |
