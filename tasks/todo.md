@@ -1,4 +1,4 @@
-﻿# Stage 10 â€“ Hardening: Tasks
+# Stage 10 – Hardening: Tasks
 
 Every task: a test that fails without the change, the five checks, the three docs updated, one commit.
 
