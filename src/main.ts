@@ -8,7 +8,7 @@ import type { Env } from './config/env.validation.js';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, APP_OPTIONS);
   configureApp(app);
-  // Runs onModuleDestroy hooks (e.g. closing the database pool) on SIGTERM/SIGINT.
+  // Runs the shutdown hooks on SIGTERM/SIGINT: workers finish their jobs, then the pool closes.
   app.enableShutdownHooks();
   const config = app.get(ConfigService<Env, true>);
   await app.listen(config.get('PORT', { infer: true }), config.get('HOST', { infer: true }));

@@ -50,7 +50,7 @@ Stage 1–9 plans and tasks are archived in `tasks/archive/`.
 
 ### 4. Shutdown order (confirmed bug)
 
-**Problem.** See "Facts checked". A running job's database calls fail during shutdown; the job is retried later, so nothing is lost, but every deploy can turn a running job into a failed attempt.
+**Problem.** See "Facts checked". Expected: a running job's database calls fail during shutdown. **Corrected while building:** they don't. Prisma 7 reopens a closed pool on the next query, so the job saves, but the reopened pool is never closed and shutdown depends on that implicit reconnect. The test checks the order instead (the pool closes after the job).
 
 **Change.** Fix it by shutdown phase, not by module order:
 - The two processors close their own workers in `onModuleDestroy` (`await this.worker.close()`, from `WorkerHost`), which waits for running jobs.

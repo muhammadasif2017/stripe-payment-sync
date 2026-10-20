@@ -349,3 +349,9 @@ Mostly they are defence in depth. The Content-Security-Policy only lets scripts 
 
 **What broke when you added them?**
 Two things. The checkout page's script was written inside the HTML, which the policy blocks, so it moved to `public/checkout.js`. And the dashboard still sent `X-Powered-By: Express`: Bull Board runs its own Express app inside ours, which sets the header again after helmet removed it, so it's turned off on that app too. A test checks the headers on the page, the API and the dashboard, but tests can't see a browser refusing a script, so both pages were also opened in a real browser and checked for policy errors.
+
+**What was wrong with shutdown, and how did you prove it?**
+Nest shuts down in phases: every `onModuleDestroy` hook, then the HTTP server closes, then every `onApplicationShutdown` hook. The database pool closed in the first phase, but `@nestjs/bullmq` stops its workers in the last one, and stopping a worker waits for its running jobs. So a job still running on `SIGTERM` lost its pool halfway through. The review expected that job to fail. A test showed it didn't: Prisma 7 quietly opens a new pool on the next query, so the job saved fine, but that new pool was never closed. So the test checks the order instead: a job held open during `app.close()` must finish before the pool closes. It failed on the old code (`['pool closed', 'job resumed']`). The fix is by phase, not by module order: the processors stop their workers in `onModuleDestroy`, and the pool closes in `onApplicationShutdown`.
+
+**What did that teach you?**
+The review's reasoning about the hook order was right, but its predicted symptom was wrong. Writing the failing test first showed that, before any "fix" for a symptom that didn't exist.

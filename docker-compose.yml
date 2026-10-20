@@ -88,6 +88,10 @@ services:
     image: stripe-payment-sync:local
     restart: unless-stopped
     init: true
+    # On stop, running jobs finish before the process exits; a job can make several Stripe calls of
+    # up to 20 s each. Docker's default 10 s would kill it midway (BullMQ would retry it later as a
+    # stalled job, so nothing is lost, but the attempt is wasted).
+    stop_grace_period: 60s
     env_file: .env
     environment:
       <<: *app-environment

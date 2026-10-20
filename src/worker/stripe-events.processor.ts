@@ -36,6 +36,15 @@ export class StripeEventsProcessor extends WorkerHost {
   }
 
   /**
+   * Stops taking jobs and waits for the running ones, in Nest's first shutdown phase, so they finish
+   * before the database pool closes (`PrismaService.onApplicationShutdown`). `@nestjs/bullmq` only
+   * closes workers in the last phase; closing twice is safe, BullMQ returns the same promise.
+   */
+  async onModuleDestroy(): Promise<void> {
+    await this.worker.close();
+  }
+
+  /**
    * Processes one job. Throwing makes BullMQ retry it, except for `UnrecoverableError`, which fails
    * the job at once.
    * @param job The job; its name says what kind it is, its data names the event or session.

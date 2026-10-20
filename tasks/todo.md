@@ -25,10 +25,10 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 ## Task 4: Shutdown order
 
-- [ ] Processors close their workers in `onModuleDestroy`
-- [ ] `PrismaService` disconnects in `onApplicationShutdown`
-- [ ] Worker `stop_grace_period` in Compose
-- [ ] e2e: a job running during `app.close()` completes and its writes land; fails before the change
+- [x] Processors close their workers in `onModuleDestroy`
+- [x] `PrismaService` disconnects in `onApplicationShutdown`
+- [x] Worker `stop_grace_period` in Compose
+- [x] e2e: a job running during `app.close()` completes and saves, and the pool closes after it; fails before the change
 
 ## Task 5: Re-queue lost events
 

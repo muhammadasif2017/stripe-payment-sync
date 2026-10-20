@@ -14,6 +14,11 @@ export class ReconciliationProcessor extends WorkerHost {
     super();
   }
 
+  /** Stops taking jobs and waits for a running one, before the database pool closes. */
+  async onModuleDestroy(): Promise<void> {
+    await this.worker.close();
+  }
+
   /**
    * Runs one reconciliation. A thrown error is retried by BullMQ (the queue's job options).
    * @param job The scheduled or manually started job.
