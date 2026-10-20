@@ -28,7 +28,12 @@ export interface ReconciliationSummary {
   missing: number;
   /** Open reconciliation issues in total, in or out of this window: the daily reminder. */
   openIssuesTotal: number;
+  /** Stored events still `PENDING` an hour after arriving whose job was gone from Redis: queued again. */
+  requeued: number;
 }
+
+/** The counts {@link selectMissing} works out from the sessions alone. */
+export type SessionCounts = Omit<ReconciliationSummary, 'openIssuesTotal' | 'requeued'>;
 
 /**
  * Start of the window, in Unix seconds as Stripe's `created` filter expects (not milliseconds).
@@ -60,8 +65,8 @@ export function selectMissing(
   knownOrderIds: ReadonlySet<string>,
   recordedPaymentIntentIds: ReadonlySet<string>,
   openIssueSessionIds: ReadonlySet<string> = new Set(),
-): { missing: ListedSession[]; summary: Omit<ReconciliationSummary, 'openIssuesTotal'> } {
-  const summary: Omit<ReconciliationSummary, 'openIssuesTotal'> = {
+): { missing: ListedSession[]; summary: SessionCounts } {
+  const summary: SessionCounts = {
     checked: sessions.length,
     notPaid: 0,
     noOrderId: 0,

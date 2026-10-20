@@ -167,6 +167,7 @@ The brief asks this directly. The answer is four independent layers, each enforc
 | A Stripe call fails | One warning line with the endpoint, event ID, HTTP status (or `no response`), error type and duration |
 | The customer closes the tab after paying | Nothing breaks: the webhook, not the browser, marks the order `PAID` |
 | A webhook never arrives, or a payment row is lost | The daily reconciliation compares the last 2 days of paid Stripe checkouts with the database and queues a repair for each missing payment; the payment's stuck events become `RECONCILED` and leave the dashboard's Failed list |
+| A stored event's job is lost from Redis (data lost, queue emptied) | The daily reconciliation queues again every event still `PENDING` an hour after arriving that has no job; one whose job still exists, in any state, is left alone |
 | A paid checkout can't be repaired (e.g. its amount doesn't match the order) | Recorded once in `reconciliation_issues`; later runs skip it and log "N open reconciliation issue(s) need review" until `resolved_at` is set |
 
 ## Run it with Docker

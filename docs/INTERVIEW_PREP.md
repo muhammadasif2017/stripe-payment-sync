@@ -355,3 +355,9 @@ Nest shuts down in phases: every `onModuleDestroy` hook, then the HTTP server cl
 
 **What did that teach you?**
 The review's reasoning about the hook order was right, but its predicted symptom was wrong. Writing the failing test first showed that, before any "fix" for a symptom that didn't exist.
+
+**What if Redis loses a job?**
+The event is stored in PostgreSQL before the job is added, so the event itself is safe; only the reminder to process it is gone. Before stage 10 nothing noticed: Stripe already got its 200 and won't resend, and reconciliation only looks for paid sessions with no payment, so a lost refund or failure event stayed `PENDING` forever. Now the daily run also looks for events still `PENDING` an hour after arriving and adds a job for each one that has none. The job ID is the event ID, so this can't create a duplicate, and an event whose job still exists (waiting, delayed, failed) is left alone. The hour keeps it away from an event whose job is being added right now.
+
+**Why check for the job before adding it, if BullMQ ignores a duplicate job ID anyway?**
+For the count and the log line. The add alone would be safe, but the run's summary should say how many events were really lost, and each one gets a warning naming it. The test also proves the check matters: without it, the summary counted an event whose job was only delayed.

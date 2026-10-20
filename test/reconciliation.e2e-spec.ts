@@ -6,8 +6,11 @@ import type Stripe from 'stripe';
 import { PrismaService } from './../src/prisma/prisma.service.js';
 import {
   RECONCILE_SESSION_JOB,
+  STRIPE_EVENT_JOB,
+  STRIPE_EVENT_JOB_OPTIONS,
   STRIPE_EVENTS_QUEUE,
   type ReconcileSessionJob,
+  type StripeEventJob,
 } from './../src/queue/queue.module.js';
 import { windowStart } from './../src/reconciliation/missing-payments.js';
 import { ReconciliationService } from './../src/reconciliation/reconciliation.service.js';
@@ -19,10 +22,11 @@ import { createTestApp } from './create-test-app.js';
 describe('Reconciliation run (e2e)', () => {
   const run = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
   const orderIds: string[] = [];
+  const eventIds: string[] = [];
   let n = 0;
   let app: NestExpressApplication;
   let prisma: PrismaService;
-  let queue: Queue<ReconcileSessionJob>;
+  let queue: Queue<ReconcileSessionJob | StripeEventJob>;
   let service: ReconciliationService;
 
   // What the fake `checkout.sessions.list` returns, and how it was called.
@@ -50,7 +54,9 @@ describe('Reconciliation run (e2e)', () => {
   beforeAll(async () => {
     app = await createTestApp();
     prisma = app.get(PrismaService);
-    queue = app.get<Queue<ReconcileSessionJob>>(getQueueToken(STRIPE_EVENTS_QUEUE));
+    queue = app.get<Queue<ReconcileSessionJob | StripeEventJob>>(
+      getQueueToken(STRIPE_EVENTS_QUEUE),
+    );
     await queue.obliterate({ force: true });
     service = new ReconciliationService(
       prisma,
@@ -69,8 +75,10 @@ describe('Reconciliation run (e2e)', () => {
     vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    // Deleted after each test, so a later test's run doesn't find them PENDING with no job.
+    await prisma.stripeEvent.deleteMany({ where: { id: { in: eventIds } } });
   });
 
   afterAll(async () => {
@@ -111,11 +119,32 @@ describe('Reconciliation run (e2e)', () => {
   }
 
   const queuedRepairs = async () =>
-    (await queue.getJobs(['waiting'])).map((job) => ({
-      id: job.id,
-      name: job.name,
-      data: job.data,
-    }));
+    (await queue.getJobs(['waiting']))
+      .filter((job) => job.name === RECONCILE_SESSION_JOB)
+      .map((job) => ({
+        id: job.id,
+        name: job.name,
+        data: job.data as ReconcileSessionJob,
+      }));
+
+  /** A stored event that arrived `minutesAgo` (the trigger sets `received_at`, so it's moved after). */
+  async function storedEvent(minutesAgo: number, status: 'PENDING' | 'PROCESSED' = 'PENDING') {
+    const id = `evt_test_${run}_${++n}`;
+    eventIds.push(id);
+    await prisma.stripeEvent.create({
+      data: {
+        id,
+        type: 'charge.refunded',
+        payload: { id, data: { object: { id: `ch_test_${run}_${n}` } } },
+        status,
+        stripeCreatedAt: new Date(),
+      },
+    });
+    await prisma.$executeRaw`
+      UPDATE stripe_events SET received_at = now() - make_interval(mins => ${minutesAgo})
+      WHERE id = ${id}`;
+    return id;
+  }
 
   it('queues a repair for a paid session whose payment is missing, and only for that one', async () => {
     const missing = await paidSession(false);
@@ -140,6 +169,7 @@ describe('Reconciliation run (e2e)', () => {
       unknownOrder: 0,
       openIssues: 0,
       openIssuesTotal: expect.any(Number),
+      requeued: 0,
     });
     expect(await queuedRepairs()).toEqual([
       {
@@ -234,6 +264,24 @@ describe('Reconciliation run (e2e)', () => {
 
     expect(summary).toMatchObject({ missing: 1, alreadyRecorded: 0 });
     expect((await queuedRepairs()).map((job) => job.data)).toEqual([{ sessionId: session.id }]);
+  });
+
+  it('queues again an event left PENDING over an hour with no job, and only that one', async () => {
+    const lost = await storedEvent(61);
+    const recent = await storedEvent(5);
+    const queued = await storedEvent(120);
+    await queue.add(STRIPE_EVENT_JOB, { eventId: queued }, { jobId: queued, delay: 60_000 });
+    await storedEvent(120, 'PROCESSED');
+
+    const summary = await service.run();
+
+    expect(summary.requeued).toBe(1);
+    const job = await queue.getJob(lost);
+    expect(job).toMatchObject({ name: STRIPE_EVENT_JOB, data: { eventId: lost } });
+    // The queue's job options apply, as for a job the webhook adds.
+    expect(job!.opts.attempts).toBe(STRIPE_EVENT_JOB_OPTIONS.attempts);
+    expect(await queue.getJob(recent)).toBeUndefined();
+    expect(await queue.getJobState(queued)).toBe('delayed');
   });
 
   it('queues nothing when every payment is recorded', async () => {

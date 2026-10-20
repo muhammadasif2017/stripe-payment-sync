@@ -16,7 +16,7 @@ NestJS 12 (ES modules), TypeScript strict, Prisma 7.10.0 with `@prisma/adapter-p
 - Whole stack in containers: `docker compose --profile app up --build` (migrate, then api on 127.0.0.1:3000 and worker). To try it next to the dev containers, use another project and ports: `POSTGRES_PORT=5436 REDIS_PORT=6381 APP_PORT=3002 docker compose -p sps-check --profile app up --build -d`, then `docker compose -p sps-check --profile app down -v`
 - Dev server: `npm run start:dev` (API and worker; `WORKER_ENABLED=false` for API only)
 - Queue dashboard: `http://localhost:3000/admin/queues`, Basic auth with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`
-- Reconciliation: runs daily (`RECONCILIATION_CRON`, UTC) in the worker; start one by hand with **Schedulers > Run now** on the dashboard. The dashboard refuses schedule edits (403): change `RECONCILIATION_CRON`. Unrepairable sessions are rows in `reconciliation_issues`; set `resolved_at` to retry one.
+- Reconciliation: runs daily (`RECONCILIATION_CRON`, UTC) in the worker; start one by hand with **Schedulers > Run now** on the dashboard. The dashboard refuses schedule edits (403): change `RECONCILIATION_CRON`. Unrepairable sessions are rows in `reconciliation_issues`; set `resolved_at` to retry one. Each run also re-queues events still `PENDING` an hour after arriving that have no job in Redis.
 - Event statuses: `PENDING`, `PROCESSED`, `FAILED`, and `RECONCILED` (settled by a reconciliation repair). The worker skips `PROCESSED` and `RECONCILED`.
 - Unit tests: `npm test`
 - e2e tests: `npm run test:e2e` (needs the databases; runs against `payments_test`)

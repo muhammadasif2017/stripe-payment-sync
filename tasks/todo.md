@@ -32,9 +32,9 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 ## Task 5: Re-queue lost events
 
-- [ ] Daily reconciliation re-queues `PENDING` events received over 1 hour ago; existing jobs untouched
-- [ ] Summary gains `requeued`
-- [ ] e2e: lost event re-queued and processed; recent event and event with a job left alone
+- [x] Daily reconciliation re-queues `PENDING` events received over 1 hour ago; existing jobs untouched
+- [x] Summary gains `requeued`
+- [x] e2e: lost event re-queued with the queue's options; recent, queued and processed events left alone
 
 ## Task 6: Trimmed payloads (L-7)
 
