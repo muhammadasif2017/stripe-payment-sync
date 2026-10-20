@@ -66,6 +66,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       PORT: '3000'
+      # All interfaces inside the container, so the published port can reach it; the host side
+      # stays on 127.0.0.1 (ports below).
+      HOST: 0.0.0.0
       WORKER_ENABLED: 'false'
     ports:
       - '127.0.0.1:${APP_PORT:-3000}:3000'

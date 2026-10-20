@@ -10,11 +10,11 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 ## Task 2: `TRUST_PROXY` and `HOST` (L-2, L-4)
 
-- [ ] `TRUST_PROXY`: `false` (default), hop count, or IPs/subnets; `true` refused at startup
-- [ ] `HOST`: default `127.0.0.1`; Compose sets `0.0.0.0`
-- [ ] `configureApp(app)` in `app.setup.ts`, used by `main.ts` and `createTestApp`
-- [ ] Unit tests for validation; e2e for `req.ip` with and without `TRUST_PROXY`
-- [ ] `.env.example`, README configuration table
+- [x] `TRUST_PROXY`: `false` (default), hop count, or IPs/subnets; `true` refused at startup
+- [x] `HOST`: default `127.0.0.1`; Compose sets `0.0.0.0`
+- [x] `configureApp(app)` in `app.setup.ts`, used by `main.ts` and `createTestApp`
+- [x] Unit tests for validation; e2e for `req.ip` with and without `TRUST_PROXY`
+- [x] `.env.example`, README configuration table
 
 ## Task 3: Security headers (L-3)
 

@@ -428,6 +428,8 @@ All settings come from environment variables (`.env` locally), validated at star
 | Variable | Example | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP port (default 3000) |
+| `HOST` | `127.0.0.1` | Address the server listens on. The default keeps it on this machine; the Docker containers use `0.0.0.0` |
+| `TRUST_PROXY` | `false` | Behind a reverse proxy: the number of proxies (usually `1`), or their IPs or subnets, so rate limits see client addresses. Never `true` (refused), which would let clients pick their own address |
 | `APP_URL` | `http://localhost:3000` | Where Stripe sends the customer back; no trailing slash |
 | `DATABASE_URL` | `postgresql://…:5435/payments` | PostgreSQL |
 | `REDIS_URL` | `redis://localhost:6380` | Redis for the queue |
@@ -506,7 +508,7 @@ Honest edges of the current version, each with its planned answer:
 - **Reconciliation issues are resolved in SQL.** Setting `resolved_at` on a row in `reconciliation_issues` makes the next run try that session again; there is no screen for it yet.
 - **The schedule is changed only in `RECONCILIATION_CRON`.** The dashboard refuses "Edit schedule" and "Remove scheduler" (403), because the worker re-registers the scheduler from the setting at every start.
 - **Reconciliation looks back 2 days.** A gap older than that (say, an outage over a long weekend plus a missed run) needs a manual look. It repairs payments, never creates orders: a paid session whose order is gone is counted and logged, not recreated.
-- **The dashboard login is HTTP Basic auth**: no logout, and outside localhost it must run behind HTTPS (a reverse proxy such as Caddy or nginx in front of the API). Failed logins are limited to 10 per 15 minutes per IP, counted in each API process's memory; behind a proxy, set Express's "trust proxy" so the limit sees client addresses. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
+- **The dashboard login is HTTP Basic auth**: no logout, and outside localhost it must run behind HTTPS (a reverse proxy such as Caddy or nginx in front of the API). Failed logins are limited to 10 per 15 minutes per IP, counted in each API process's memory; behind a proxy, set `TRUST_PROXY` so the limit sees client addresses. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
 - **Workers keep the newest read from Stripe, timed by PostgreSQL's clock.** A job whose read is older than one already saved for the order reads Stripe again, up to 3 times per attempt. Two assumptions: the database clock never goes back (if it does, the affected order is logged and its jobs fail until the clock catches up), and Stripe's `retrieve` and `list` calls show a change once its webhook is sent (true for list APIs, not for Stripe Search, which this code doesn't use). An event whose reads keep losing for all 5 attempts ends `FAILED` in the dashboard, where it can be retried.
 - **Restoring a backup:** `stripe_events.received_at` is set by a trigger, so run `pg_restore` with `--disable-triggers` to keep the original times.
 - **Amounts are 32-bit integers**: up to about $21 million per row, plenty for course sales.

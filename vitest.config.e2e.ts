@@ -25,6 +25,8 @@ export default defineConfig({
       // Fixed dashboard login, so test/admin.e2e-spec.ts doesn't depend on .env.
       ADMIN_USERNAME: 'admin',
       ADMIN_PASSWORD: 'e2e-dashboard-password',
+      // No proxy in front of the tests; test/trust-proxy.e2e-spec.ts sets its own.
+      TRUST_PROXY: 'false',
     },
     // Database test files share one database; run them one at a time so their rows don't collide.
     fileParallelism: false,

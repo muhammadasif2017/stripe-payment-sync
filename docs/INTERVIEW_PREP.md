@@ -337,3 +337,9 @@ For logins, failures are the attack: password guesses. For checkout, every reque
 
 **Why apply it in the Nest module instead of `main.ts`?**
 The e2e tests build the app from `AppModule` without running `main.ts`. Middleware registered in `CheckoutModule` (`configure()` with `forRoutes`) is part of the app the tests build, so the tests cover the real setup.
+
+**What is "trust proxy", and why refuse `true`?**
+Behind a reverse proxy, every request's socket comes from the proxy, so `req.ip` is the proxy's address and one attacker's failed logins lock out every admin. The proxy puts the real client in `X-Forwarded-For`, and "trust proxy" tells Express how many hops of that header to believe. `TRUST_PROXY=1` means "one proxy in front of me". `true` would believe the whole header, which the client itself can write, so anyone could choose their own `req.ip` and walk past every rate limit. Without a proxy the default `false` ignores the header entirely; a test checks that a forged `X-Forwarded-For` doesn't escape a lockout.
+
+**Why does the dev server listen on 127.0.0.1 now?**
+Node listens on every interface by default, so `npm run start:dev` put checkout, the webhook endpoint and the dashboard (Basic auth over plain HTTP) on the local network. Now `HOST` defaults to `127.0.0.1`. Containers set `HOST=0.0.0.0`, because a published port reaches the container from outside it; Compose still publishes it on the host's 127.0.0.1 only.

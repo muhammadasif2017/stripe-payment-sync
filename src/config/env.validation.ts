@@ -1,9 +1,17 @@
 import { CronExpressionParser } from 'cron-parser';
 import Joi from 'joi';
+import { isIP } from 'node:net';
 
 /** Settings the app needs, after validation and type conversion. */
 export interface Env {
   PORT: number;
+  /** Address the HTTP server listens on: 127.0.0.1 (this machine only) unless set. */
+  HOST: string;
+  /**
+   * Express's "trust proxy": false, the number of proxies in front of the app, or the proxies' IPs,
+   * subnets or proxy-addr names. Decides which address `req.ip` (and so every rate limit) sees.
+   */
+  TRUST_PROXY: false | number | string[];
   DATABASE_URL: string;
   REDIS_URL: string;
   STRIPE_SECRET_KEY: string;
@@ -19,9 +27,53 @@ export interface Env {
   RECONCILIATION_CRON: string;
 }
 
+// proxy-addr's names for groups of addresses, accepted by Express's "trust proxy".
+const PROXY_NAMES = new Set(['loopback', 'linklocal', 'uniquelocal']);
+
+/** Whether `entry` is an IP address, a subnet (`10.0.0.0/8`) or a proxy-addr name. */
+function isProxyAddress(entry: string): boolean {
+  if (PROXY_NAMES.has(entry)) {
+    return true;
+  }
+  const [address, prefix, ...rest] = entry.split('/');
+  const version = isIP(address);
+  if (version === 0 || rest.length > 0) {
+    return false;
+  }
+  if (prefix === undefined) {
+    return true;
+  }
+  return /^\d+$/.test(prefix) && Number(prefix) <= (version === 4 ? 32 : 128);
+}
+
 // Custom messages keep secret values out of errors; Joi's default pattern message prints the value.
 const envSchema = Joi.object<Env>({
   PORT: Joi.number().port().default(3000),
+  // Containers set 0.0.0.0, because a published port reaches the container from outside it.
+  HOST: Joi.string().hostname().default('127.0.0.1'),
+  // Never `true`: trusting every hop lets any client choose its own req.ip with X-Forwarded-For,
+  // and so slip past every per-IP rate limit.
+  // Joi returns a default as given, without running custom(), so it is already the parsed value.
+  TRUST_PROXY: Joi.string()
+    .default(false)
+    .custom((value: string, helpers) => {
+      const setting = value.trim();
+      if (setting === 'false') {
+        return false;
+      }
+      if (/^\d+$/.test(setting)) {
+        return Number(setting);
+      }
+      const entries = setting.split(',').map((entry) => entry.trim());
+      if (setting !== 'true' && entries.every(isProxyAddress)) {
+        return entries;
+      }
+      return helpers.error('any.invalid');
+    })
+    .messages({
+      'any.invalid':
+        '{#label} must be false, the number of proxies in front of the app, or their IPs or subnets (never true)',
+    }),
   DATABASE_URL: Joi.string()
     .uri({ scheme: ['postgres', 'postgresql'] })
     .required(),
