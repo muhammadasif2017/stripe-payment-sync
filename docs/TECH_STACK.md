@@ -77,6 +77,10 @@ The daily reconciliation is a BullMQ job scheduler, not `@nestjs/schedule` (an i
 
 The standard rate limiter for Express. It limits failed dashboard logins to 10 per 15 minutes per IP, counting only 401 responses, and `POST /checkout` to 10 per minute per IP, counting every request (stage 10). It needs no store for one API process; with several, its Redis store would share the counts. Pinned exactly, like the other packages that guard access.
 
+## `helmet` 8.3.0
+
+Sets the standard security headers on every response: a Content-Security-Policy, `X-Content-Type-Options: nosniff`, a strict referrer policy, HSTS, and no `X-Powered-By`. It is the usual choice for Express, and its default policy already fits both pages (scripts only from this site; inline styles and Google Fonts, which Bull Board uses). Two changes: `frame-ancestors 'none'` so no site can frame the dashboard, and no `upgrade-insecure-requests`, which would break the app on plain-HTTP localhost. Pinned exactly (stage 10).
+
 ## Docker (multi-stage) and Docker Compose profiles
 
 One image runs as the API or the worker (`WORKER_ENABLED`), so both always run the same code. A multi-stage build compiles with all dependencies and ships only production ones: no TypeScript, no Prisma CLI, no test tools in the running container, which makes it smaller and gives an attacker less to work with. A separate `migrate` target applies migrations once before the app starts. A Compose profile (`app`) keeps `docker compose up -d` meaning "databases for development", while `docker compose --profile app up --build` starts everything.

@@ -18,10 +18,10 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 ## Task 3: Security headers (L-3)
 
-- [ ] `helmet()` with `frame-ancestors 'none'`, without `upgrade-insecure-requests`
-- [ ] Checkout page script moved to `public/checkout.js`
-- [ ] e2e asserts headers on `/`, the API and `/admin/queues`; no `X-Powered-By`
-- [ ] Browser check: `/` and `/admin/queues` work, no CSP errors in the console
+- [x] `helmet()` with `frame-ancestors 'none'`, without `upgrade-insecure-requests`
+- [x] Checkout page script moved to `public/checkout.js`
+- [x] e2e asserts headers on `/`, the API and `/admin/queues`; no `X-Powered-By`
+- [x] Browser check: `/` and `/admin/queues` work, no CSP errors in the console
 
 ## Task 4: Shutdown order
 

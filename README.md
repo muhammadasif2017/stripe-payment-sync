@@ -141,6 +141,7 @@ The queue job carries only the event ID, and its job ID is that same ID, so a du
 | Order status is always right | Computed from **all** payments and refunds, not stepped per event; latest objects fetched from Stripe | Unit tests for every status; e2e: refund before payment, late decline after success, cancel after expiry |
 | The client can't choose the price | Request accepts only `courseId` and `email`; the server sets amount and currency | e2e: a body with `amount` → `400`, no order |
 | Never live mode | Startup refuses keys that aren't `sk_test_…`; live-mode events refused | Unit and e2e tests |
+| Pages can't be framed or injected into | helmet's security headers: a Content-Security-Policy allowing scripts only from this site, `frame-ancestors 'none'`, `nosniff`; no `X-Powered-By` | e2e: headers on the page, the API and the dashboard; a real browser loaded the checkout page and the dashboard with no policy errors |
 
 ## How a payment is never recorded twice
 

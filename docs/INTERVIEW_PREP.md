@@ -343,3 +343,9 @@ Behind a reverse proxy, every request's socket comes from the proxy, so `req.ip`
 
 **Why does the dev server listen on 127.0.0.1 now?**
 Node listens on every interface by default, so `npm run start:dev` put checkout, the webhook endpoint and the dashboard (Basic auth over plain HTTP) on the local network. Now `HOST` defaults to `127.0.0.1`. Containers set `HOST=0.0.0.0`, because a published port reaches the container from outside it; Compose still publishes it on the host's 127.0.0.1 only.
+
+**What do the security headers protect against, if the pages show no user data?**
+Mostly they are defence in depth. The Content-Security-Policy only lets scripts from this site run, so even if some text ended up in a page as markup, an injected `<script>` wouldn't execute. `frame-ancestors 'none'` stops another site from showing the dashboard in an invisible frame and tricking a logged-in admin into clicking "Retry" or "Clean" (clickjacking); the same-origin check can't catch that, because requests from inside the frame really are same-origin.
+
+**What broke when you added them?**
+Two things. The checkout page's script was written inside the HTML, which the policy blocks, so it moved to `public/checkout.js`. And the dashboard still sent `X-Powered-By: Express`: Bull Board runs its own Express app inside ours, which sets the header again after helmet removed it, so it's turned off on that app too. A test checks the headers on the page, the API and the dashboard, but tests can't see a browser refusing a script, so both pages were also opened in a real browser and checked for policy errors.
