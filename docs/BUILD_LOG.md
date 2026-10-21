@@ -551,3 +551,21 @@ Dependabot's first run opened 6 PRs. Four passed CI. Two failed for reasons outs
   - `.github/workflows/ci.yml`: `push` runs only on `main`; pull requests still run on every commit. `docker` no longer has `needs: checks`, so both jobs start together. Cost: when `checks` fails, `docker` still uses its minute and a half of runner time.
   - README and `CLAUDE.md` say when CI runs.
   - Proof, from this follow-up's PR (#26): the push created a single `pull_request` run and no `push` run. Both jobs started at 16:22:38 and passed; the run took 1 min 23 s (16:22:35 to 16:23:58), down from about 2 min 45 s.
+
+## README for a first-time reader (2026-10-21)
+
+A review of the README as a hiring manager or recruiter would read it: strong for engineers, but the first screen said nothing about who built it or what it shows, and the build history was out of date.
+
+- **At a glance** section at the top: who built it, what it is, how it was built and checked, the skills it shows. No links, by the author's choice.
+- The tagline says "recorded once" instead of "exactly once", in line with the GitHub About text: Stripe delivers webhooks at least once, and the project's guarantee is idempotent processing.
+- **Build history** replaces "Roadmap": ten stages, with stages 9 and 10 listed, and stage 8 no longer says CI runs "on every push".
+- Two rows added to "What it guarantees": customer data kept to a minimum, and checkout can't be flooded, each with its proof.
+- The link to `docs/INTERVIEW_PREP.md` is labelled "Design questions and answers"; the file name is unchanged.
+- **Demo and screenshots** (`docs/images/`): a recording of the real flow in Stripe test mode. Shop page, Stripe Checkout with card 4242, success page, the processed job in Bull Board, the order `PAID` in PostgreSQL, then a refund made with the Stripe CLI arriving by webhook and the order `REFUNDED`. The tables shown are real query results from that run. Recorded with a Playwright script outside the repo, against the app with its worker and `stripe listen`. The dashboard password went only to local `/admin` requests, never to Stripe, and the billing country was set to United States. Stored as a GIF, which plays inline on GitHub. Screenshots of the checkout page and of a failed job in the dashboard illustrate the "Try it end to end" steps.
+- **Fixes from a review of the PR:**
+  - The customer-data row said email, name and address are "never stored". It now says they are kept out of stored Stripe events, and that an order keeps the optional email typed at checkout. Its proof no longer says the webhook test processes the event; that test only checks the stored row.
+  - "Stripe is never called" was dropped from the checkout-limit proof: every request in that test is invalid, so it couldn't fail on that point.
+  - "10 stages, then hardened" counted the hardening twice; it is stage 10. A "Why it matters" line was added for non-technical readers.
+  - The dashboard screenshot showed an old failure with an error class the code no longer throws. It was retaken from the wrong-key run the README describes: "Invalid API Key provided" after 5 attempts, then retried with the right key and processed on attempt 6. The old failed job was removed from the local queue first, so the demo's dashboard shows no failed jobs.
+  - The GIF was re-recorded with the Stripe and dashboard loading screens cut out (38 s, 1.9 MB), and amounts labelled in dollars.
+  - The MP4 was dropped: GitHub's file view offers only "View raw" for it, not a player.
