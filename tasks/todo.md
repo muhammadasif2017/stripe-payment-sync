@@ -1,66 +1,8 @@
-# Stage 10 – Hardening: Tasks
+# Stage 10 Follow-up: Tasks
 
-Every task: a test that fails without the change, the five checks, the three docs updated, one commit.
-
-## Task 1: Rate limit on `POST /checkout` (M-1)
-
-- [x] 10 requests per minute per IP on `POST /checkout`; 429 with a JSON message, logged with the IP
-- [x] `GET /checkout/courses` is not limited
-- [x] Own e2e file and app; fails with the middleware removed
-
-## Task 2: `TRUST_PROXY` and `HOST` (L-2, L-4)
-
-- [x] `TRUST_PROXY`: `false` (default), hop count, or IPs/subnets; `true` refused at startup
-- [x] `HOST`: default `127.0.0.1`; Compose sets `0.0.0.0`
-- [x] `configureApp(app)` in `app.setup.ts`, used by `main.ts` and `createTestApp`
-- [x] Unit tests for validation; e2e for `req.ip` with and without `TRUST_PROXY`
-- [x] `.env.example`, README configuration table
-
-## Task 3: Security headers (L-3)
-
-- [x] `helmet()` with `frame-ancestors 'none'`, without `upgrade-insecure-requests`
-- [x] Checkout page script moved to `public/checkout.js`
-- [x] e2e asserts headers on `/`, the API and `/admin/queues`; no `X-Powered-By`
-- [x] Browser check: `/` and `/admin/queues` work, no CSP errors in the console
-
-## Task 4: Shutdown order
-
-- [x] Processors close their workers in `onModuleDestroy`
-- [x] `PrismaService` disconnects in `onApplicationShutdown`
-- [x] Worker `stop_grace_period` in Compose
-- [x] e2e: a job running during `app.close()` completes and saves, and the pool closes after it; fails before the change
-
-## Task 5: Re-queue lost events
-
-- [x] Daily reconciliation re-queues `PENDING` events received over 1 hour ago; existing jobs untouched
-- [x] Summary gains `requeued`
-- [x] e2e: lost event re-queued with the queue's options; recent, queued and processed events left alone
-
-## Task 6: Trimmed payloads (L-7)
-
-- [x] Only `id`, `type`, `created`, `livemode`, `api_version` and `data.object` `{id, object, payment_intent}` stored
-- [x] Expanded `payment_intent` stored as its ID
-- [x] Existing rows trimmed by a migration (decision 2); run on `payments` with the user's approval
-- [x] Unit test of trimming; e2e webhook with customer details stored without them and still processed
-
-## Task 7: Passwords (L-5)
-
-- [x] Redis `--requirepass`, required `REDIS_PASSWORD`; healthcheck and container URLs use it
-- [x] `POSTGRES_PASSWORD` required, empty in `.env.example`
-- [x] CI docker job sets both
-- [x] Local `.env` updated without printing values; Redis container recreated, data kept
-
-## Task 8: Node, digests, Dependabot, scan (M-2)
-
-- [x] Node 24.22.0 (decision 1), pinned by digest in both `FROM` lines; CI, `engines`, README, `CLAUDE.md`
-- [x] `postgres` and `redis` images pinned by digest
-- [x] `.github/dependabot.yml`: npm, docker, github-actions; Prisma grouped; no Node or Prisma majors
-- [x] Trivy in the CI docker job, failing on fixable HIGH/CRITICAL (decision 3); baseline run locally first
-
-## Task 9: Checkpoint
-
-- [x] Five checks pass
-- [x] Stack started as a separate Compose project; `/health`, `/`, dashboard login, clean stop
-- [x] Docs complete
-- [x] Branch review, then PR
-- [x] Human review and merge
+- [ ] Dependabot: `typescript` majors ignored; `vitest` and `@vitest/*` grouped, majors ignored
+- [ ] PRs #22 and #23 closed with the reason
+- [ ] CI: `push` on `main` only; `docker` runs alongside `checks`
+- [ ] Docs updated
+- [ ] PR: one run per commit, both jobs pass, time measured
+- [ ] Human review and merge
