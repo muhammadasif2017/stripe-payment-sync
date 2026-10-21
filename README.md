@@ -212,7 +212,7 @@ Stop with `docker compose --profile app down`; add `-v` to delete the database a
 
 To run the app on your machine with hot reload, and the databases in Docker.
 
-**You need:** Node.js 22.12+ and npm 11 (`npm install -g npm@11.14.0`), Docker Desktop, a Stripe test account and the Stripe CLI.
+**You need:** Node.js 24 (with its bundled npm 11), Docker Desktop, a Stripe test account and the Stripe CLI.
 
 ```bash
 # 1. Install (also generates the Prisma client)

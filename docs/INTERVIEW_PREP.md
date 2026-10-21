@@ -373,3 +373,12 @@ Because "only this machine" still means every process on it. Without a password,
 
 **How did you add a password without losing the queued jobs?**
 Redis keeps its data in a named volume with the append-only file, so recreating the container with the new setting keeps it. The key counts were checked before and after: the same. The password went into `.env` from a script, never printed. PostgreSQL's password didn't change, because PostgreSQL only reads `POSTGRES_PASSWORD` the first time it creates its data folder.
+
+**Why pin images by digest and not just by version tag?**
+A tag is a label that can be moved: `postgres:17-alpine` today and next month are different images, and even `17.11-alpine` can be rebuilt. A digest is a hash of the contents, so the image that passed CI is the image that runs. The cost is that nothing updates by itself, which is why Dependabot proposes new digests every week and CI tests each proposal.
+
+**What did the image scan find, and how did you fix it?**
+Three high findings, all in the copy of npm that comes with the Node image, none in the app's own packages. The running app never uses npm: it only runs `node dist/main.js`. So the runtime stage now deletes npm after installing the dependencies, and the scan is clean. The CI step fails only on high or critical findings that have a fix, because an unfixed one can't be acted on and would block every pull request. I also checked it can fail: the plain Node image, still with npm, fails the same scan.
+
+**Why is the Trivy action pinned to a commit hash?**
+A version tag on a GitHub Action can be moved to point at different code, and a CI step runs with the repository's checkout. Trivy's own action had its tags republished in March 2026. A commit hash can't be changed, and Dependabot still proposes updates to it.

@@ -1,0 +1,47 @@
+# Weekly update pull requests. Each one runs CI, including the image scan.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # The Prisma CLI, client and adapter must stay on the same version.
+      prisma:
+        patterns:
+          - prisma
+          - '@prisma/*'
+    ignore:
+      # npm's `latest` for Prisma is an 8.x release candidate; a major upgrade is planned by hand.
+      - dependency-name: prisma
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@prisma/*'
+        update-types: ['version-update:semver-major']
+      # Follows the Node major in the Dockerfile and CI.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # A Node major is a planned upgrade (CI, engines, docs), not a weekly bump.
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # PostgreSQL and Redis majors need a data upgrade, not a new tag.
+      - dependency-name: postgres
+        update-types: ['version-update:semver-major']
+      - dependency-name: redis
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

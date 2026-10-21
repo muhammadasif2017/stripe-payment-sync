@@ -52,10 +52,10 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 ## Task 8: Node, digests, Dependabot, scan (M-2)
 
-- [ ] Node 24.22.0 (decision 1), pinned by digest in both `FROM` lines; CI, `engines`, README, `CLAUDE.md`
-- [ ] `postgres` and `redis` images pinned by digest
-- [ ] `.github/dependabot.yml`: npm, docker, github-actions; Prisma grouped; no Node or Prisma majors
-- [ ] Trivy in the CI docker job, failing on fixable HIGH/CRITICAL (decision 3); baseline run locally first
+- [x] Node 24.22.0 (decision 1), pinned by digest in both `FROM` lines; CI, `engines`, README, `CLAUDE.md`
+- [x] `postgres` and `redis` images pinned by digest
+- [x] `.github/dependabot.yml`: npm, docker, github-actions; Prisma grouped; no Node or Prisma majors
+- [x] Trivy in the CI docker job, failing on fixable HIGH/CRITICAL (decision 3); baseline run locally first
 
 ## Task 9: Checkpoint
 

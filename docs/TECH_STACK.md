@@ -85,6 +85,14 @@ Sets the standard security headers on every response: a Content-Security-Policy,
 
 One image runs as the API or the worker (`WORKER_ENABLED`), so both always run the same code. A multi-stage build compiles with all dependencies and ships only production ones: no TypeScript, no Prisma CLI, no test tools in the running container, which makes it smaller and gives an attacker less to work with. A separate `migrate` target applies migrations once before the app starts. A Compose profile (`app`) keeps `docker compose up -d` meaning "databases for development", while `docker compose --profile app up --build` starts everything. Redis runs with a password and both database passwords are required (`${VAR:?message}`), so Compose refuses to start without them instead of starting with a known or empty one (stage 10).
 
+## Node.js 24
+
+The runtime, in the Dockerfile, CI and `engines` (stage 10; Node 22 before). Node 22's support ends on 2027-04-30 and Node 24's on 2028-04-30, and every dependency accepts it. Its bundled npm (11.19.1) reads the lockfile, so the images no longer install their own npm.
+
+## Image digests, Dependabot and Trivy
+
+Every image is pinned to a version tag plus its digest (`node:24.22.0-alpine@sha256:…`). A tag can be moved to different contents; a digest can't, so every build uses exactly the image that was tested. The digest is the multi-arch index, so it works on Intel and ARM machines. Dependabot (`.github/dependabot.yml`) opens a weekly pull request when npm packages, the Dockerfile's image, the Compose images or the GitHub Actions have a new version, and CI checks each one. Prisma's packages move together in one pull request, and majors of Node, Prisma, PostgreSQL and Redis are left for a planned upgrade. Trivy scans the runtime image in CI and fails on HIGH or CRITICAL vulnerabilities that have a fix; its action is pinned to a commit, like the other actions, because a tag on a third-party action can be changed to point at other code.
+
 ## Claude Code hooks
 
 The AI coding assistant reads `CLAUDE.md` at the start of each session, but those rules are only advice. A hook is a script the tool runs at fixed points, here before every shell command, and it can block the command. `.claude/hooks/commit-guard.mjs` is plain Node.js with no dependencies, so it runs the same in Git Bash and PowerShell. It only affects the assistant; commits typed by a person go straight to git.
