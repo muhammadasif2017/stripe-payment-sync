@@ -283,7 +283,7 @@ By breaking one on purpose: a throwaway branch changed one expected value, CI we
 By doing it: a fresh clone into an empty folder, following only the README's Docker section, with nothing from the development setup but the Stripe test key. The stack built, migrated itself and answered; a test payment made through the containers ended `PAID`. Two things only that test could show: Compose names projects after their folder (so a second copy with the same folder name would take over the first one's containers), and a clone made before the README was pushed tests the wrong README.
 
 **Why does the image pin npm?**
-The lockfile was written by npm 11; the Node 22.15 image ships npm 10, which resolves one optional peer dependency differently and refuses the lockfile with "Missing: typescript@5.9.3". Pinning npm 11.14.0 in the Dockerfile, in CI and in `packageManager` makes every install use the same resolver.
+The lockfile was written by npm 11; the Node 22.15 image ships npm 10, which resolves one optional peer dependency differently and refuses the lockfile with "Missing: typescript@5.9.3". Pinning npm 11.14.0 in the Dockerfile, in CI and in `packageManager` makes every install use the same resolver. (Stage 10 moved to Node 24, whose bundled npm 11 accepts the lockfile, so the Dockerfile and CI no longer install their own npm.)
 
 
 ## Stage 9: Race fixes
@@ -381,4 +381,4 @@ A tag is a label that can be moved: `postgres:17-alpine` today and next month ar
 Three high findings, all in the copy of npm that comes with the Node image, none in the app's own packages. The running app never uses npm: it only runs `node dist/main.js`. So the runtime stage now deletes npm after installing the dependencies, and the scan is clean. The CI step fails only on high or critical findings that have a fix, because an unfixed one can't be acted on and would block every pull request. I also checked it can fail: the plain Node image, still with npm, fails the same scan.
 
 **Why is the Trivy action pinned to a commit hash?**
-A version tag on a GitHub Action can be moved to point at different code, and a CI step runs with the repository's checkout. Trivy's own action had its tags republished in March 2026. A commit hash can't be changed, and Dependabot still proposes updates to it.
+A version tag on a GitHub Action can be moved to point at different code, and a CI step runs with the repository's checkout. A commit hash can't be changed, and Dependabot still proposes updates to it. The pinned version also matters: GitHub advisory GHSA-9p44-j4g5-cfx5 (February 2026) is a script injection in trivy-action 0.31.0 to 0.34.0; the pinned v0.36.0 is past the fix. And the action pins its own steps (`setup-trivy`, `actions/cache`) to commits too, so the pin covers all the code it runs.
