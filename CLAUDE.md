@@ -8,7 +8,7 @@ NestJS backend that receives Stripe webhooks, processes them through a BullMQ qu
 
 ## Stack
 
-NestJS 12 (ES modules), TypeScript strict, Prisma 7.10.0 with `@prisma/adapter-pg`, PostgreSQL 17, Redis 7, Vitest, oxlint, Docker Compose. Node 22.
+NestJS 12 (ES modules), TypeScript strict, Prisma 7.10.0 with `@prisma/adapter-pg`, PostgreSQL 17, Redis 7, Vitest, oxlint, Docker Compose. Node 24.
 
 ## Commands
 
@@ -16,7 +16,7 @@ NestJS 12 (ES modules), TypeScript strict, Prisma 7.10.0 with `@prisma/adapter-p
 - Whole stack in containers: `docker compose --profile app up --build` (migrate, then api on 127.0.0.1:3000 and worker). To try it next to the dev containers, use another project and ports: `POSTGRES_PORT=5436 REDIS_PORT=6381 APP_PORT=3002 docker compose -p sps-check --profile app up --build -d`, then `docker compose -p sps-check --profile app down -v`
 - Dev server: `npm run start:dev` (API and worker; `WORKER_ENABLED=false` for API only)
 - Queue dashboard: `http://localhost:3000/admin/queues`, Basic auth with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`
-- Reconciliation: runs daily (`RECONCILIATION_CRON`, UTC) in the worker; start one by hand with **Schedulers > Run now** on the dashboard. The dashboard refuses schedule edits (403): change `RECONCILIATION_CRON`. Unrepairable sessions are rows in `reconciliation_issues`; set `resolved_at` to retry one.
+- Reconciliation: runs daily (`RECONCILIATION_CRON`, UTC) in the worker; start one by hand with **Schedulers > Run now** on the dashboard. The dashboard refuses schedule edits (403): change `RECONCILIATION_CRON`. Unrepairable sessions are rows in `reconciliation_issues`; set `resolved_at` to retry one. Each run also re-queues events still `PENDING` an hour after arriving that have no job in Redis.
 - Event statuses: `PENDING`, `PROCESSED`, `FAILED`, and `RECONCILED` (settled by a reconciliation repair). The worker skips `PROCESSED` and `RECONCILED`.
 - Unit tests: `npm test`
 - e2e tests: `npm run test:e2e` (needs the databases; runs against `payments_test`)
@@ -67,7 +67,7 @@ Run all five checks (unit, e2e, lint, typecheck, build) before every commit. CI 
 - BullMQ custom job IDs can't be integers or contain `:`; use `-` as separator.
 - e2e files that load `WorkerModule` register the reconciliation scheduler on the test Redis; remove it (`removeJobScheduler`) and obliterate the `reconciliation` queue in `afterAll`.
 - npm's `latest` tag for Prisma points at an 8.x release candidate; stay on 7.10.0. Upgrade the CLI, `@prisma/client` and `@prisma/adapter-pg` together, never through `npm audit fix`.
-- npm 11.14.0 wrote the lockfile (`packageManager` in `package.json`); npm 10 refuses it. The Dockerfile installs 11.14.0.
+- npm 11.14.0 wrote the lockfile (`packageManager` in `package.json`); npm 10 refuses it. Node 24's bundled npm 11 accepts it.
 - The runtime image installs with `--omit=dev --omit=optional`: the Prisma CLI is `devOptional` and `--omit=dev` alone keeps it.
 - The Prisma generator has `importFileExtension = "js"`; without it, generating before `tsconfig.json` exists (Docker) emits `.ts` imports that crash at runtime.
 - `prisma init` downloads agent skill folders (`.agents/`, `.claude/skills/`, `.windsurf/`); they are git-ignored, not part of the project. `.claude/settings.json` and `.claude/hooks/` are committed.

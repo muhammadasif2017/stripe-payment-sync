@@ -1,11 +1,11 @@
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
-import { BullBoardModule } from '@bull-board/nestjs';
-import { Module } from '@nestjs/common';
+import { BULL_BOARD_ADAPTER, BullBoardModule } from '@bull-board/nestjs';
+import { Inject, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Env } from '../config/env.validation.js';
 import { RECONCILIATION_QUEUE, STRIPE_EVENTS_QUEUE } from '../queue/queue.module.js';
-import type { RequestHandler } from 'express';
+import type { Express, RequestHandler } from 'express';
 import { createBasicAuth } from './basic-auth.js';
 import { createLoginLimiter } from './login-limit.js';
 import { rejectCrossSite } from './same-origin.js';
@@ -57,4 +57,13 @@ function dashboardGuard(loginLimit: RequestHandler, basicAuth: RequestHandler): 
     ),
   ],
 })
-export class AdminModule {}
+export class AdminModule {
+  /**
+   * Bull Board serves the dashboard from its own Express app, which adds `X-Powered-By: Express`
+   * after helmet has removed it; turned off here, like on the main app.
+   * @param adapter Bull Board's Express adapter; `getRouter()` returns its Express app.
+   */
+  constructor(@Inject(BULL_BOARD_ADAPTER) adapter: ExpressAdapter) {
+    (adapter.getRouter() as Express).disable('x-powered-by');
+  }
+}

@@ -141,6 +141,7 @@ The queue job carries only the event ID, and its job ID is that same ID, so a du
 | Order status is always right | Computed from **all** payments and refunds, not stepped per event; latest objects fetched from Stripe | Unit tests for every status; e2e: refund before payment, late decline after success, cancel after expiry |
 | The client can't choose the price | Request accepts only `courseId` and `email`; the server sets amount and currency | e2e: a body with `amount` → `400`, no order |
 | Never live mode | Startup refuses keys that aren't `sk_test_…`; live-mode events refused | Unit and e2e tests |
+| Pages can't be framed or injected into | helmet's security headers: a Content-Security-Policy allowing scripts only from this site, `frame-ancestors 'none'`, `nosniff`; no `X-Powered-By` | e2e: headers on the page, the API and the dashboard; a real browser loaded the checkout page and the dashboard with no policy errors |
 
 ## How a payment is never recorded twice
 
@@ -166,6 +167,7 @@ The brief asks this directly. The answer is four independent layers, each enforc
 | A Stripe call fails | One warning line with the endpoint, event ID, HTTP status (or `no response`), error type and duration |
 | The customer closes the tab after paying | Nothing breaks: the webhook, not the browser, marks the order `PAID` |
 | A webhook never arrives, or a payment row is lost | The daily reconciliation compares the last 2 days of paid Stripe checkouts with the database and queues a repair for each missing payment; the payment's stuck events become `RECONCILED` and leave the dashboard's Failed list |
+| A stored event's job is lost from Redis (data lost, queue emptied) | The daily reconciliation queues again every event still `PENDING` an hour after arriving that has no job; one whose job still exists, in any state, is left alone |
 | A paid checkout can't be repaired (e.g. its amount doesn't match the order) | Recorded once in `reconciliation_issues`; later runs skip it and log "N open reconciliation issue(s) need review" until `resolved_at` is set |
 
 ## Run it with Docker
@@ -177,7 +179,7 @@ The brief asks this directly. The answer is four independent layers, each enforc
 git clone https://github.com/muhammadasif2017/stripe-payment-sync.git
 cd stripe-payment-sync
 
-# 2. Configure: copy the example, then fill in three values (see below)
+# 2. Configure: copy the example, then fill in five values (see below)
 cp .env.example .env
 
 # 3. Build and start everything: migrations, then the API and the worker
@@ -188,13 +190,14 @@ curl http://localhost:3000/health
 # {"status":"ok"}
 ```
 
-The three values in `.env`:
+The five values in `.env`:
 
 | Variable | Where it comes from |
 | --- | --- |
 | `STRIPE_SECRET_KEY` | Stripe dashboard, test mode: **Developers → API keys → Secret key** (`sk_test_…`) |
 | `STRIPE_WEBHOOK_SECRET` | `stripe listen --print-secret` (see [step 1 below](#1-forward-stripes-webhooks-to-your-machine)) |
 | `ADMIN_PASSWORD` | Any password of 16+ characters, for the dashboard |
+| `POSTGRES_PASSWORD`, `REDIS_PASSWORD` | Passwords for the database and the queue; Compose refuses to start without them. Letters, digits, `-` and `_` only. Generate each with `node -e "console.log(require('crypto').randomBytes(18).toString('base64url'))"` |
 
 If you change `.env` later, apply it with `docker compose --profile app up -d --force-recreate api worker`.
 
@@ -209,13 +212,14 @@ Stop with `docker compose --profile app down`; add `-v` to delete the database a
 
 To run the app on your machine with hot reload, and the databases in Docker.
 
-**You need:** Node.js 22.12+ and npm 11 (`npm install -g npm@11.14.0`), Docker Desktop, a Stripe test account and the Stripe CLI.
+**You need:** Node.js 24 (with its bundled npm 11), Docker Desktop, a Stripe test account and the Stripe CLI.
 
 ```bash
 # 1. Install (also generates the Prisma client)
 npm install
 
-# 2. Configure: then put your Stripe test key (sk_test_…) and a dashboard password (16+ characters) in .env
+# 2. Configure: then put your Stripe test key (sk_test_…), a dashboard password (16+ characters)
+#    and the PostgreSQL and Redis passwords in .env, also in place of the placeholders in the four URLs
 cp .env.example .env
 
 # 3. Start PostgreSQL (localhost:5435) and Redis (localhost:6380), without the app containers
@@ -234,7 +238,7 @@ curl http://localhost:3000/health
 ```
 
 > [!TIP]
-> The non-default ports (`5435`, `6380`) avoid clashing with other local databases. Change `POSTGRES_PORT` / `REDIS_PORT` and the two URLs in `.env` if they are taken.
+> The non-default ports (`5435`, `6380`) avoid clashing with other local databases. Change `POSTGRES_PORT` / `REDIS_PORT` and the URLs in `.env` if they are taken.
 
 The app **refuses to start** with a missing or invalid setting, and names every problem at once without printing secret values.
 
@@ -344,7 +348,7 @@ The payment row is back (with a new row ID), and the order status is recomputed.
 | --- | --- | --- | --- |
 | `GET` | `/health` | | `200 {"status":"ok"}`, or `503` when PostgreSQL is unreachable |
 | `GET` | `/checkout/courses` | | Courses with server-side prices |
-| `POST` | `/checkout` | `{ "courseId": "nestjs-fundamentals", "email"?: "..." }` | `201 { orderId, checkoutUrl }`; `400` for an unknown course or any extra field; `502` (generic message) when Stripe fails |
+| `POST` | `/checkout` | `{ "courseId": "nestjs-fundamentals", "email"?: "..." }` | `201 { orderId, checkoutUrl }`; `400` for an unknown course or any extra field; `429` after 10 requests in a minute from one IP; `502` (generic message) when Stripe fails |
 | `POST` | `/webhooks/stripe` | Stripe event, `Stripe-Signature` header | `200 {"received":true}`; `400` for a bad signature or live mode; `500` so Stripe retries |
 | `GET` | `/`, `/success.html`, `/cancel.html` | | Minimal checkout pages |
 | `GET` | `/admin/queues` | | Bull Board queue dashboard; HTTP Basic auth on every path below it (`401` without it); changes sent from another site get `403` |
@@ -428,9 +432,11 @@ All settings come from environment variables (`.env` locally), validated at star
 | Variable | Example | Purpose |
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP port (default 3000) |
+| `HOST` | `127.0.0.1` | Address the server listens on. The default keeps it on this machine; the Docker containers use `0.0.0.0` |
+| `TRUST_PROXY` | `false` | Behind a reverse proxy: the number of proxies (usually `1`), or their IPs or subnets, so rate limits see client addresses. Never `true` (refused), which would let clients pick their own address |
 | `APP_URL` | `http://localhost:3000` | Where Stripe sends the customer back; no trailing slash |
 | `DATABASE_URL` | `postgresql://…:5435/payments` | PostgreSQL |
-| `REDIS_URL` | `redis://localhost:6380` | Redis for the queue |
+| `REDIS_URL` | `redis://:<password>@localhost:6380` | Redis for the queue, with `REDIS_PASSWORD` in it |
 | `STRIPE_SECRET_KEY` | `sk_test_…` | Test-mode secret key; anything else is refused |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_…` | Verifies webhook signatures |
 | `WORKER_ENABLED` | `true` | `false` runs the API only, so API and worker can run as separate processes |
@@ -438,17 +444,17 @@ All settings come from environment variables (`.env` locally), validated at star
 | `ADMIN_PASSWORD` | 16+ characters | Dashboard password; required, no default |
 | `RECONCILIATION_CRON` | `0 3 * * *` | When the daily reconciliation runs, as a 5-field cron pattern in UTC |
 | `APP_PORT` | `3000` | Docker only: host port for the API container |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`, `REDIS_PORT` | see `.env.example` | Docker Compose: database credentials and host ports. In the containers, the database and Redis URLs are built from these and point at the service names |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`, `REDIS_PASSWORD`, `REDIS_PORT` | see `.env.example` | Docker Compose: credentials and host ports. Both passwords are required. In the containers, the database and Redis URLs are built from these and point at the service names |
 | `TEST_DATABASE_URL` | `…/payments_test` | Database for e2e tests; must differ from `DATABASE_URL` |
-| `TEST_REDIS_URL` | `redis://localhost:6380/1` | Redis database for e2e tests; must differ from `REDIS_URL` |
+| `TEST_REDIS_URL` | `redis://:<password>@localhost:6380/1` | Redis database for e2e tests; must differ from `REDIS_URL` |
 
 `.env` is git-ignored; [`.env.example`](.env.example) documents every variable.
 
 ## Testing
 
 ```bash
-npm test            # 156 unit tests
-npm run test:e2e    # 97 end-to-end tests (needs `docker compose up -d`)
+npm test            # 186 unit tests
+npm run test:e2e    # 126 end-to-end tests (needs `docker compose up -d`)
 npm run lint
 npm run typecheck
 npm run build
@@ -456,7 +462,7 @@ npm run build
 
 - **Real infrastructure, isolated.** e2e tests run against their own PostgreSQL database (`payments_test`, created and migrated automatically) and their own Redis database. They refuse to start if pointed at the development database or a remote server.
 - **No network, no secrets.** Stripe is replaced by a fake client and webhook payloads are signed locally, so the suite runs offline and in CI.
-- **CI on every push and pull request** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the five checks against PostgreSQL and Redis services, an audit of the production dependencies, then the Docker image built and the whole stack started and checked.
+- **CI on every push and pull request** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the five checks against PostgreSQL and Redis services, an audit of the production dependencies, then the Docker image built, the whole stack started and checked, and the runtime image scanned with Trivy (fails on fixable HIGH or CRITICAL findings). Images are pinned by digest; Dependabot proposes updates weekly.
 - **The key tests are proven to catch their bug.** Each was checked by breaking the code on purpose (dropping the job ID, skipping signature checks, an off-by-one in the retry count…) and watching it fail. The full list is in the [build log](docs/BUILD_LOG.md).
 - **Verified against real Stripe** at every stage since checkout: test payments with card 4242, `stripe trigger`, event redelivery, refunds, a live database outage, a failed job retried from the dashboard, and a deleted payment restored by reconciliation.
 
@@ -497,6 +503,8 @@ The project is built in eight stages, each delivered as one reviewed pull reques
 - [x] **7. Daily reconciliation**: compare the last two days of Stripe checkouts with the database and repair anything missed
 - [x] **8. CI and Docker**: GitHub Actions on every push; `docker compose --profile app up` starts migrations, API, worker, PostgreSQL and Redis
 
+After the eight: race fixes (stage 9) and hardening from a security review (stage 10: rate-limited checkout, security headers, passwords for Redis and PostgreSQL, trimmed event payloads, Node 24 and an image scan).
+
 ## Known limits
 
 Honest edges of the current version, each with its planned answer:
@@ -506,7 +514,7 @@ Honest edges of the current version, each with its planned answer:
 - **Reconciliation issues are resolved in SQL.** Setting `resolved_at` on a row in `reconciliation_issues` makes the next run try that session again; there is no screen for it yet.
 - **The schedule is changed only in `RECONCILIATION_CRON`.** The dashboard refuses "Edit schedule" and "Remove scheduler" (403), because the worker re-registers the scheduler from the setting at every start.
 - **Reconciliation looks back 2 days.** A gap older than that (say, an outage over a long weekend plus a missed run) needs a manual look. It repairs payments, never creates orders: a paid session whose order is gone is counted and logged, not recreated.
-- **The dashboard login is HTTP Basic auth**: no logout, and outside localhost it must run behind HTTPS (a reverse proxy such as Caddy or nginx in front of the API). Failed logins are limited to 10 per 15 minutes per IP, counted in each API process's memory; behind a proxy, set Express's "trust proxy" so the limit sees client addresses. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
+- **The dashboard login is HTTP Basic auth**: no logout, and outside localhost it must run behind HTTPS (a reverse proxy such as Caddy or nginx in front of the API). Failed logins are limited to 10 per 15 minutes per IP, counted in each API process's memory; behind a proxy, set `TRUST_PROXY` so the limit sees client addresses. Bull Board can also delete jobs; a deleted job loses no data, because the event stays in `stripe_events`.
 - **Workers keep the newest read from Stripe, timed by PostgreSQL's clock.** A job whose read is older than one already saved for the order reads Stripe again, up to 3 times per attempt. Two assumptions: the database clock never goes back (if it does, the affected order is logged and its jobs fail until the clock catches up), and Stripe's `retrieve` and `list` calls show a change once its webhook is sent (true for list APIs, not for Stripe Search, which this code doesn't use). An event whose reads keep losing for all 5 attempts ends `FAILED` in the dashboard, where it can be retried.
 - **Restoring a backup:** `stripe_events.received_at` is set by a trigger, so run `pg_restore` with `--disable-triggers` to keep the original times.
 - **Amounts are 32-bit integers**: up to about $21 million per row, plenty for course sales.

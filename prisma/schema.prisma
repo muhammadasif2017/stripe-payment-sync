@@ -32,7 +32,8 @@ model StripeEvent {
   id              String            @id
   /// Event type, e.g. checkout.session.completed
   type            String
-  /// The full event as Stripe sent it, kept for debugging and replays.
+  /// The event's ID, type and time and the IDs the worker reads (src/webhooks/stored-payload.ts).
+  /// The rest, including customer details, is never stored; the worker fetches it from Stripe.
   payload         Json
   status          StripeEventStatus @default(PENDING)
   attempts        Int               @default(0)

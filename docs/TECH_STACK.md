@@ -75,11 +75,23 @@ The daily reconciliation is a BullMQ job scheduler, not `@nestjs/schedule` (an i
 
 ## `express-rate-limit` 8.7.0
 
-The standard rate limiter for Express. It limits failed dashboard logins to 10 per 15 minutes per IP, counting only 401 responses. It needs no store for one API process; with several, its Redis store would share the counts. Pinned exactly, like the other packages that guard access.
+The standard rate limiter for Express. It limits failed dashboard logins to 10 per 15 minutes per IP, counting only 401 responses, and `POST /checkout` to 10 per minute per IP, counting every request (stage 10). It needs no store for one API process; with several, its Redis store would share the counts. Pinned exactly, like the other packages that guard access.
+
+## `helmet` 8.3.0
+
+Sets the standard security headers on every response: a Content-Security-Policy, `X-Content-Type-Options: nosniff`, a strict referrer policy, HSTS, and no `X-Powered-By`. It is the usual choice for Express, and its default policy already fits both pages (scripts only from this site; inline styles and Google Fonts, which Bull Board uses). Two changes: `frame-ancestors 'none'` so no site can frame the dashboard, and no `upgrade-insecure-requests`, which would break the app on plain-HTTP localhost. Pinned exactly (stage 10).
 
 ## Docker (multi-stage) and Docker Compose profiles
 
-One image runs as the API or the worker (`WORKER_ENABLED`), so both always run the same code. A multi-stage build compiles with all dependencies and ships only production ones: no TypeScript, no Prisma CLI, no test tools in the running container, which makes it smaller and gives an attacker less to work with. A separate `migrate` target applies migrations once before the app starts. A Compose profile (`app`) keeps `docker compose up -d` meaning "databases for development", while `docker compose --profile app up --build` starts everything.
+One image runs as the API or the worker (`WORKER_ENABLED`), so both always run the same code. A multi-stage build compiles with all dependencies and ships only production ones: no TypeScript, no Prisma CLI, no test tools in the running container, which makes it smaller and gives an attacker less to work with. A separate `migrate` target applies migrations once before the app starts. A Compose profile (`app`) keeps `docker compose up -d` meaning "databases for development", while `docker compose --profile app up --build` starts everything. Redis runs with a password and both database passwords are required (`${VAR:?message}`), so Compose refuses to start without them instead of starting with a known or empty one (stage 10).
+
+## Node.js 24
+
+The runtime, in the Dockerfile, CI and `engines` (stage 10; Node 22 before). Node 22's support ends on 2027-04-30 and Node 24's on 2028-04-30, and every dependency accepts it. Its bundled npm (11.19.1) reads the lockfile, so the images no longer install their own npm.
+
+## Image digests, Dependabot and Trivy
+
+Every image is pinned to a version tag plus its digest (`node:24.22.0-alpine@sha256:…`). A tag can be moved to different contents; a digest can't, so every build uses exactly the image that was tested. The digest is the multi-arch index, so it works on Intel and ARM machines. Dependabot (`.github/dependabot.yml`) opens a weekly pull request when npm packages, the Dockerfile's image, the Compose images or the GitHub Actions have a new version, and CI checks each one. Prisma's packages move together in one pull request, and majors of Node, Prisma, PostgreSQL and Redis are left for a planned upgrade. Trivy scans the runtime image in CI and fails on HIGH or CRITICAL vulnerabilities that have a fix; its action is pinned to a commit, like the other actions, because a tag on a third-party action can be changed to point at other code.
 
 ## Claude Code hooks
 

@@ -283,7 +283,7 @@ By breaking one on purpose: a throwaway branch changed one expected value, CI we
 By doing it: a fresh clone into an empty folder, following only the README's Docker section, with nothing from the development setup but the Stripe test key. The stack built, migrated itself and answered; a test payment made through the containers ended `PAID`. Two things only that test could show: Compose names projects after their folder (so a second copy with the same folder name would take over the first one's containers), and a clone made before the README was pushed tests the wrong README.
 
 **Why does the image pin npm?**
-The lockfile was written by npm 11; the Node 22.15 image ships npm 10, which resolves one optional peer dependency differently and refuses the lockfile with "Missing: typescript@5.9.3". Pinning npm 11.14.0 in the Dockerfile, in CI and in `packageManager` makes every install use the same resolver.
+The lockfile was written by npm 11; the Node 22.15 image ships npm 10, which resolves one optional peer dependency differently and refuses the lockfile with "Missing: typescript@5.9.3". Pinning npm 11.14.0 in the Dockerfile, in CI and in `packageManager` makes every install use the same resolver. (Stage 10 moved to Node 24, whose bundled npm 11 accepts the lockfile, so the Dockerfile and CI no longer install their own npm.)
 
 
 ## Stage 9: Race fixes
@@ -326,3 +326,59 @@ The first fix patched the URL patterns for the variants I had tested: a trailing
 
 **What does this design assume?**
 That the database clock doesn't go back, and that Stripe's `retrieve` and `list` calls show a change as soon as its webhook is sent (Stripe's docs promise this for list APIs, not for Search). Both are written down, and a clock that did go back is logged with the affected order.
+
+## Stage 10: Hardening
+
+**Why rate-limit the checkout endpoint? It's public on purpose.**
+Each request writes an order row and calls Stripe. Without a limit, a script could fill the `orders` table and, worse, use up the Stripe account's API rate limit, which the worker shares. Then real payment events start failing with Stripe 429s. So `POST /checkout` allows 10 requests per minute per IP. The course list (`GET /checkout/courses`) isn't limited, because the page reads it on every visit.
+
+**Why every request, not only failed ones like the login limit?**
+For logins, failures are the attack: password guesses. For checkout, every request costs a database write and a Stripe call, so every request counts, including rejected ones.
+
+**Why apply it in the Nest module instead of `main.ts`?**
+The e2e tests build the app from `AppModule` without running `main.ts`. Middleware registered in `CheckoutModule` (`configure()` with `forRoutes`) is part of the app the tests build, so the tests cover the real setup.
+
+**What is "trust proxy", and why refuse `true`?**
+Behind a reverse proxy, every request's socket comes from the proxy, so `req.ip` is the proxy's address and one attacker's failed logins lock out every admin. The proxy puts the real client in `X-Forwarded-For`, and "trust proxy" tells Express how many hops of that header to believe. `TRUST_PROXY=1` means "one proxy in front of me". `true` would believe the whole header, which the client itself can write, so anyone could choose their own `req.ip` and walk past every rate limit. Without a proxy the default `false` ignores the header entirely; a test checks that a forged `X-Forwarded-For` doesn't escape a lockout.
+
+**Why does the dev server listen on 127.0.0.1 now?**
+Node listens on every interface by default, so `npm run start:dev` put checkout, the webhook endpoint and the dashboard (Basic auth over plain HTTP) on the local network. Now `HOST` defaults to `127.0.0.1`. Containers set `HOST=0.0.0.0`, because a published port reaches the container from outside it; Compose still publishes it on the host's 127.0.0.1 only.
+
+**What do the security headers protect against, if the pages show no user data?**
+Mostly they are defence in depth. The Content-Security-Policy only lets scripts from this site run, so even if some text ended up in a page as markup, an injected `<script>` wouldn't execute. `frame-ancestors 'none'` stops another site from showing the dashboard in an invisible frame and tricking a logged-in admin into clicking "Retry" or "Clean" (clickjacking); the same-origin check can't catch that, because requests from inside the frame really are same-origin.
+
+**What broke when you added them?**
+Two things. The checkout page's script was written inside the HTML, which the policy blocks, so it moved to `public/checkout.js`. And the dashboard still sent `X-Powered-By: Express`: Bull Board runs its own Express app inside ours, which sets the header again after helmet removed it, so it's turned off on that app too. A test checks the headers on the page, the API and the dashboard, but tests can't see a browser refusing a script, so both pages were also opened in a real browser and checked for policy errors.
+
+**What was wrong with shutdown, and how did you prove it?**
+Nest shuts down in phases: every `onModuleDestroy` hook, then the HTTP server closes, then every `onApplicationShutdown` hook. The database pool closed in the first phase, but `@nestjs/bullmq` stops its workers in the last one, and stopping a worker waits for its running jobs. So a job still running on `SIGTERM` lost its pool halfway through. The review expected that job to fail. A test showed it didn't: Prisma 7 quietly opens a new pool on the next query, so the job saved fine, but that new pool was never closed. So the test checks the order instead: a job held open during `app.close()` must finish before the pool closes. It failed on the old code (`['pool closed', 'job resumed']`). The fix is by phase, not by module order: the processors stop their workers in `onModuleDestroy`, and the pool closes in `onApplicationShutdown`.
+
+**What did that teach you?**
+The review's reasoning about the hook order was right, but its predicted symptom was wrong. Writing the failing test first showed that, before any "fix" for a symptom that didn't exist.
+
+**What if Redis loses a job?**
+The event is stored in PostgreSQL before the job is added, so the event itself is safe; only the reminder to process it is gone. Before stage 10 nothing noticed: Stripe already got its 200 and won't resend, and reconciliation only looks for paid sessions with no payment, so a lost refund or failure event stayed `PENDING` forever. Now the daily run also looks for events still `PENDING` an hour after arriving and adds a job for each one that has none. The job ID is the event ID, so this can't create a duplicate, and an event whose job still exists (waiting, delayed, failed) is left alone. The hour keeps it away from an event whose job is being added right now.
+
+**Why check for the job before adding it, if BullMQ ignores a duplicate job ID anyway?**
+For the count and the log line. The add alone would be safe, but the run's summary should say how many events were really lost, and each one gets a warning naming it. The test also proves the check matters: without it, the summary counted an event whose job was only delayed.
+
+**Why not keep the whole Stripe event "for debugging"?**
+Because the worker never trusts it: it reads the event's object ID, fetches the current object from Stripe, and saves that. The rest of the event was only a copy of customer data (email, name, billing address) kept forever with no use and no retention rule. Now `stripe_events.payload` keeps the event's ID, type, time and API version, plus the object's ID, type and payment intent ID, the only fields the worker and the repair SQL read. Data you don't store can't leak. For debugging, Stripe keeps the full event retrievable through its Events API for 30 days (Stripe's API reference).
+
+**How did you remove the data already stored?**
+A migration rewrites every existing row to the same shape, with the same rules as new events (an expanded payment intent becomes its ID). It can't be undone, so it was tried first inside a transaction on sample rows in the test database and rolled back, and the development database only got it after an explicit yes.
+
+**Redis only listens on 127.0.0.1. Why does it need a password?**
+Because "only this machine" still means every process on it. Without a password, any local program (or a compromised dependency) could add, change or delete queue jobs, skipping the dashboard's login entirely. Now Redis runs with `--requirepass` and Compose refuses to start without `REDIS_PASSWORD`. The PostgreSQL password became required too: `.env.example` used to ship `change-me`, and a copied example quietly kept it.
+
+**How did you add a password without losing the queued jobs?**
+Redis keeps its data in a named volume with the append-only file, so recreating the container with the new setting keeps it. The key counts were checked before and after: the same. The password went into `.env` from a script, never printed. PostgreSQL's password didn't change, because PostgreSQL only reads `POSTGRES_PASSWORD` the first time it creates its data folder.
+
+**Why pin images by digest and not just by version tag?**
+A tag is a label that can be moved: `postgres:17-alpine` today and next month are different images, and even `17.11-alpine` can be rebuilt. A digest is a hash of the contents, so the image that passed CI is the image that runs. The cost is that nothing updates by itself, which is why Dependabot proposes new digests every week and CI tests each proposal.
+
+**What did the image scan find, and how did you fix it?**
+Three high findings, all in the copy of npm that comes with the Node image, none in the app's own packages. The running app never uses npm: it only runs `node dist/main.js`. So the runtime stage now deletes npm after installing the dependencies, and the scan is clean. The CI step fails only on high or critical findings that have a fix, because an unfixed one can't be acted on and would block every pull request. I also checked it can fail: the plain Node image, still with npm, fails the same scan.
+
+**Why is the Trivy action pinned to a commit hash?**
+A version tag on a GitHub Action can be moved to point at different code, and a CI step runs with the repository's checkout. A commit hash can't be changed, and Dependabot still proposes updates to it. The pinned version also matters: GitHub advisory GHSA-9p44-j4g5-cfx5 (February 2026) is a script injection in trivy-action 0.31.0 to 0.34.0; the pinned v0.36.0 is past the fix. And the action pins its own steps (`setup-trivy`, `actions/cache`) to commits too, so the pin covers all the code it runs.

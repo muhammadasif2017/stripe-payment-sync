@@ -47,6 +47,14 @@ describe('Dashboard login rate limit (e2e)', () => {
     expect(res.headers['ratelimit-policy']).toBeDefined();
   });
 
+  it('ignores a forged X-Forwarded-For when no proxy is trusted', async () => {
+    for (let i = 0; i < MAX_FAILED_LOGINS; i++) {
+      expect([401, 429]).toContain((await dashboard('wrong-password-123')).status);
+    }
+
+    await dashboard('e2e-dashboard-password').set('X-Forwarded-For', '203.0.113.9').expect(429);
+  });
+
   it('limits only the dashboard', async () => {
     // Locks the IP out itself, so it means something when run alone. Once an earlier test has
     // locked it out, the rest of these answers are already 429.

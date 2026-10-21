@@ -6,11 +6,13 @@
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # Pinned by digest (the multi-arch index), like the Node image; Dependabot proposes updates.
+    image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Required, no default: an empty value stops Compose before anything starts.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - '127.0.0.1:${POSTGRES_PORT:-5435}:5432'
@@ -23,11 +25,23 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     restart: unless-stopped
     # Append-only file + named volume: queued and failed BullMQ jobs (stage 4) survive a container
     # restart or recreate. Without them a `docker compose down` would silently drop pending payments.
-    command: ['redis-server', '--appendonly', 'yes']
+    # The password keeps other local processes from adding, changing or deleting queue jobs without
+    # the dashboard's login.
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--requirepass',
+        '${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}',
+      ]
+    environment:
+      # redis-cli reads the password from here, so the healthcheck needs no argument for it.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     ports:
       - '127.0.0.1:${REDIS_PORT:-6380}:6379'
     volumes:
@@ -64,8 +78,11 @@ services:
     environment: &app-environment
       # Service names, not localhost: these override the host URLs in .env.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       PORT: '3000'
+      # All interfaces inside the container, so the published port can reach it; the host side
+      # stays on 127.0.0.1 (ports below).
+      HOST: 0.0.0.0
       WORKER_ENABLED: 'false'
     ports:
       - '127.0.0.1:${APP_PORT:-3000}:3000'
@@ -85,6 +102,10 @@ services:
     image: stripe-payment-sync:local
     restart: unless-stopped
     init: true
+    # On stop, running jobs finish before the process exits; a job can make several Stripe calls of
+    # up to 20 s each. Docker's default 10 s would kill it midway (BullMQ would retry it later as a
+    # stalled job, so nothing is lost, but the attempt is wasted).
+    stop_grace_period: 60s
     env_file: .env
     environment:
       <<: *app-environment

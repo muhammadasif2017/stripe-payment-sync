@@ -105,6 +105,36 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...validEnv, ADMIN_USERNAME: 'ad:min' })).toThrow('ADMIN_USERNAME');
   });
 
+  it('listens on 127.0.0.1 unless HOST is set', () => {
+    expect(validateEnv(validEnv).HOST).toBe('127.0.0.1');
+    expect(validateEnv({ ...validEnv, HOST: '0.0.0.0' }).HOST).toBe('0.0.0.0');
+    expect(() => validateEnv({ ...validEnv, HOST: 'not a host' })).toThrow('HOST');
+  });
+
+  it('trusts no proxy by default', () => {
+    expect(validateEnv(validEnv).TRUST_PROXY).toBe(false);
+  });
+
+  it.each([
+    ['false', false],
+    ['1', 1],
+    ['10.0.0.1', ['10.0.0.1']],
+    ['10.0.0.0/8, 172.16.0.0/12', ['10.0.0.0/8', '172.16.0.0/12']],
+    ['::1, fd00::/8', ['::1', 'fd00::/8']],
+    ['loopback,uniquelocal', ['loopback', 'uniquelocal']],
+  ])('reads TRUST_PROXY=%j', (setting, expected) => {
+    expect(validateEnv({ ...validEnv, TRUST_PROXY: setting }).TRUST_PROXY).toEqual(expected);
+  });
+
+  it.each(['true', 'yes', '-1', '10.0.0.0/33', '10.0.0.1/8/8', '10.0.0.1,', 'proxy.example.com'])(
+    'rejects TRUST_PROXY=%j',
+    (setting) => {
+      expect(() => validateEnv({ ...validEnv, TRUST_PROXY: setting })).toThrow(
+        /TRUST_PROXY.*never true/,
+      );
+    },
+  );
+
   it('does not put secret values in the error message', () => {
     const run = () => validateEnv({ ...validEnv, STRIPE_SECRET_KEY: 'sk_live_supersecret' });
 

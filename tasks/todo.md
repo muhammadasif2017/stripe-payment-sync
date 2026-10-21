@@ -1,92 +1,66 @@
-# Stage 9 – Race Fixes: Tasks
+# Stage 10 – Hardening: Tasks
 
-## Task 1: A repair settles only events stored before its snapshot
+Every task: a test that fails without the change, the five checks, the three docs updated, one commit.
 
-**Acceptance criteria:**
-- [x] `reconcileSession` reads the database clock before its Stripe calls
-- [x] The settling `UPDATE` adds `received_at < snapshotStartedAt`
-- [x] Events stored before the snapshot are still settled, as today
+## Task 1: Rate limit on `POST /checkout` (M-1)
 
-**Verification:**
-- [x] e2e: an event stored while the repair runs stays `PENDING` and is not returned
-- [x] e2e: an event stored before the repair is still `RECONCILED` (the existing settling test)
-- [x] The first test fails on today's code
-- [x] Docs updated; stage 8 archive and `.gitignore` (`.serena/`) in this commit
+- [x] 10 requests per minute per IP on `POST /checkout`; 429 with a JSON message, logged with the IP
+- [x] `GET /checkout/courses` is not limited
+- [x] Own e2e file and app; fails with the middleware removed
 
-**Files likely touched:** `src/worker/stripe-event-handler.ts`, `test/stripe-event-handler.e2e-spec.ts`, `.gitignore`, `tasks/`
+## Task 2: `TRUST_PROXY` and `HOST` (L-2, L-4)
 
-## Task 2: The newest read from Stripe wins
+- [x] `TRUST_PROXY`: `false` (default), hop count, or IPs/subnets; `true` refused at startup
+- [x] `HOST`: default `127.0.0.1`; Compose sets `0.0.0.0`
+- [x] `configureApp(app)` in `app.setup.ts`, used by `main.ts` and `createTestApp`
+- [x] Unit tests for validation; e2e for `req.ip` with and without `TRUST_PROXY`
+- [x] `.env.example`, README configuration table
 
-**Acceptance criteria:**
-- [x] Migration: `orders.synced_at` (`Timestamptz(3)`, nullable)
-- [x] Under the order lock, a snapshot with `startedAt` older than `synced_at` is not saved; the job reads Stripe again, up to 3 reads, then fails with a retryable error
-- [x] A saved snapshot sets `synced_at` to its `startedAt`
-- [x] Event jobs and repairs both follow the rule
+## Task 3: Security headers (L-3)
 
-**Verification:**
-- [x] e2e: a stale `charge.refunded` read, overtaken by a `refund.updated` save, reads again and ends `SUCCEEDED` / `REFUNDED`
-- [x] e2e: reads that are always stale stop after 3 with a retryable error and save nothing
-- [x] e2e: a stale repair reads again too
-- [x] The first test fails on today's code
-- [x] Docs updated
+- [x] `helmet()` with `frame-ancestors 'none'`, without `upgrade-insecure-requests`
+- [x] Checkout page script moved to `public/checkout.js`
+- [x] e2e asserts headers on `/`, the API and `/admin/queues`; no `X-Powered-By`
+- [x] Browser check: `/` and `/admin/queues` work, no CSP errors in the console
 
-- [x] `received_at` set by a `BEFORE INSERT` trigger (replaces Task 1's `dbgenerated` default); fake-clock test fails without it
+## Task 4: Shutdown order
 
-**Files likely touched:** `prisma/schema.prisma`, `prisma/migrations/`, `src/worker/stripe-event-handler.ts`, `test/stripe-event-handler.e2e-spec.ts`
+- [x] Processors close their workers in `onModuleDestroy`
+- [x] `PrismaService` disconnects in `onApplicationShutdown`
+- [x] Worker `stop_grace_period` in Compose
+- [x] e2e: a job running during `app.close()` completes and saves, and the pool closes after it; fails before the change
 
-## Task 3: Recording a failure does not undo a settled event
+## Task 5: Re-queue lost events
 
-**Acceptance criteria:**
-- [x] `recordFailure` only updates rows with status `PENDING` or `FAILED`
-- [x] A skipped update is logged; the original error is still rethrown
+- [x] Daily reconciliation re-queues `PENDING` events received over 1 hour ago; existing jobs untouched
+- [x] Summary gains `requeued`
+- [x] e2e: lost event re-queued with the queue's options; recent, queued and processed events left alone
 
-**Verification:**
-- [x] e2e: a handler that settles its event and then throws leaves it `RECONCILED`
-- [x] The test fails on today's code
-- [x] Docs updated
+## Task 6: Trimmed payloads (L-7)
 
-**Files likely touched:** `src/worker/stripe-events.processor.ts`, `test/worker.e2e-spec.ts`
+- [x] Only `id`, `type`, `created`, `livemode`, `api_version` and `data.object` `{id, object, payment_intent}` stored
+- [x] Expanded `payment_intent` stored as its ID
+- [x] Existing rows trimmed by a migration (decision 2); run on `payments` with the user's approval
+- [x] Unit test of trimming; e2e webhook with customer details stored without them and still processed
 
-## Task 4: Schedule guard catches a trailing slash and other letter case
+## Task 7: Passwords (L-5)
 
-**Acceptance criteria:**
-- [x] Both patterns accept an optional trailing slash and ignore case
-- [x] `Run now` stays allowed
+- [x] Redis `--requirepass`, required `REDIS_PASSWORD`; healthcheck and container URLs use it
+- [x] `POSTGRES_PASSWORD` required, empty in `.env.example`
+- [x] CI docker job sets both
+- [x] Local `.env` updated without printing values; Redis container recreated, data kept
 
-**Verification:**
-- [x] Unit: trailing slash and `/API/` for edit and remove are refused; `Run now` passes
-- [x] The new cases fail on today's code
-- [x] Docs updated
+## Task 8: Node, digests, Dependabot, scan (M-2)
 
-- [x] e2e: the same requests through the real app get 403 and leave the scheduler unchanged
+- [x] Node 24.22.0 (decision 1), pinned by digest in both `FROM` lines; CI, `engines`, README, `CLAUDE.md`
+- [x] `postgres` and `redis` images pinned by digest
+- [x] `.github/dependabot.yml`: npm, docker, github-actions; Prisma grouped; no Node or Prisma majors
+- [x] Trivy in the CI docker job, failing on fixable HIGH/CRITICAL (decision 3); baseline run locally first
 
-**Files likely touched:** `src/admin/schedule-guard.ts`, `src/admin/schedule-guard.spec.ts`
+## Task 9: Checkpoint
 
-## Task 5: Tests for checks nothing currently proves
-
-**Acceptance criteria:**
-- [x] A `payment_intent.*` event with a mismatched PI amount fails permanently and saves nothing
-- [x] Reconciliation repairs a paid session whose only payment row is `FAILED`
-- [x] Queue retry settings asserted by value
-- [x] Login-limit "only the dashboard" test passes when run alone
-
-**Verification:**
-- [x] Each test fails when the code it covers is broken, then the code is restored
-- [x] Docs updated
-
-**Files likely touched:** `test/stripe-event-handler.e2e-spec.ts`, `test/reconciliation.e2e-spec.ts`, `test/queue.e2e-spec.ts`, `test/admin-login-limit.e2e-spec.ts`
-
-## Review follow-ups (second `/ship`)
-
-- [x] Schedule guard as an Express `Router` with Bull Board's routes: `#`, `\` refused; empty and obliterate refused on the reconciliation queue
-- [x] Handler tests move stored events 1 s back (no same-millisecond flake)
-- [x] Tests: read time from the database clock; equal-millisecond rules on both comparisons; read count
-- [x] Warning for a future `synced_at`; a successful save keeps `RECONCILED`
-- [x] Migrations rewritten: no-op deleted, trigger in its own migration with `search_path`
-- [x] Assumptions and accepted limits in README and docs
-
-## Checkpoint: Complete
-- [x] All five checks pass locally and in CI
-- [x] `/ship` on the branch diff: GO
-- [x] Commit, push, open PR
-- [ ] Human review and merge
+- [x] Five checks pass
+- [x] Stack started as a separate Compose project; `/health`, `/`, dashboard login, clean stop
+- [x] Docs complete
+- [x] Branch review, then PR
+- [x] Human review and merge

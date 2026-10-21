@@ -19,9 +19,11 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The same images as docker-compose.yml. Dependabot updates that file, not these: copy its
+    # digests here when it does.
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
         env:
           POSTGRES_USER: payments
           POSTGRES_PASSWORD: ci-password
@@ -32,7 +34,7 @@ jobs:
           --health-cmd "pg_isready -U payments -d payments"
           --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
-        image: redis:7-alpine
+        image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
         ports:
           - 6379:6379
         options: >-
@@ -53,10 +55,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.15.0
+          # The Node version in the Dockerfile; its bundled npm 11 accepts the lockfile.
+          node-version: 24.22.0
           cache: npm
-      # The npm that wrote package-lock.json ("packageManager"); npm 10 refuses the lockfile.
-      - run: npm install -g npm@11.14.0
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
@@ -77,6 +78,8 @@ jobs:
         run: |
           cp .env.example .env
           sed -i 's/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=ci-dashboard-password/' .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-postgres-password/' .env
+          sed -i 's/^REDIS_PASSWORD=.*/REDIS_PASSWORD=ci-redis-password/' .env
       - name: Build the image and start the whole stack
         run: docker compose --profile app up --build -d
       - name: Wait for the API to be healthy
@@ -93,6 +96,17 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/admin/queues)" = 401
           test "$(curl -s -o /dev/null -w '%{http_code}' -u admin:ci-dashboard-password http://127.0.0.1:3000/admin/queues)" = 200
           docker compose --profile app ps
+      # Fails on HIGH or CRITICAL vulnerabilities that have a fix; unfixed ones can't be acted on.
+      # Only the runtime image ships; the migrate image's Prisma CLI findings are known (L-6).
+      - name: Scan the runtime image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: stripe-payment-sync:local
+          version: v0.70.0
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
       - name: Show logs on failure
         if: failure()
         run: docker compose --profile app logs --no-color

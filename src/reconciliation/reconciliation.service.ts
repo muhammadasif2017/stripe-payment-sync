@@ -5,8 +5,10 @@ import Stripe from 'stripe';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   RECONCILE_SESSION_JOB,
+  STRIPE_EVENT_JOB,
   STRIPE_EVENTS_QUEUE,
   type ReconcileSessionJob,
+  type StripeEventJob,
 } from '../queue/queue.module.js';
 import { StripeCalls } from '../stripe/stripe-calls.js';
 import { STRIPE_CLIENT } from '../stripe/stripe.module.js';
@@ -25,9 +27,15 @@ const SESSION_PAGE_SIZE = 100;
 /** Stops a runaway pagination loop: 100 pages is 10,000 checkouts in 2 days. */
 const MAX_SESSION_PAGES = 100;
 
+/** How old a `PENDING` event must be before a missing job counts as lost: 1 hour. */
+export const LOST_EVENT_AGE_MS = 60 * 60 * 1000;
+
+/** Lost events queued again per run; the next run takes the rest. */
+const MAX_REQUEUED_EVENTS = 1000;
+
 /**
  * Compares the last 2 days of completed Stripe checkouts with the database and queues a repair job
- * for every paid one whose payment is missing.
+ * for every paid one whose payment is missing. Also queues again stored events whose job was lost.
  */
 @Injectable()
 export class ReconciliationService {
@@ -37,7 +45,8 @@ export class ReconciliationService {
     private readonly prisma: PrismaService,
     @Inject(STRIPE_CLIENT) private readonly stripe: Stripe,
     private readonly stripeCalls: StripeCalls,
-    @InjectQueue(STRIPE_EVENTS_QUEUE) private readonly queue: Queue<ReconcileSessionJob>,
+    @InjectQueue(STRIPE_EVENTS_QUEUE)
+    private readonly queue: Queue<ReconcileSessionJob | StripeEventJob>,
   ) {}
 
   /**
@@ -73,7 +82,6 @@ export class ReconciliationService {
       new Set(openIssues.map((i) => i.stripeCheckoutSessionId)),
     );
     const missing = selection.missing;
-    const summary: ReconciliationSummary = { ...selection.summary, openIssuesTotal };
 
     // The run's timestamp makes each job ID unique per run: a repair queued yesterday that is still
     // kept in Redis doesn't block today's. Repairs are idempotent, so a duplicate is harmless.
@@ -86,12 +94,14 @@ export class ReconciliationService {
         opts: { jobId: `reconcile-${session.id}-${runId}` },
       })),
     );
+    const requeued = await this.requeueLostEvents(now);
+    const summary: ReconciliationSummary = { ...selection.summary, openIssuesTotal, requeued };
 
     this.logger.log(
       `Reconciliation: checked ${summary.checked} completed sessions, ${summary.missing} missing and queued, ` +
         `${summary.alreadyRecorded} already recorded, skipped ${summary.notPaid} not paid, ` +
         `${summary.noOrderId} without order ID, ${summary.unknownOrder} with unknown order, ` +
-        `${summary.openIssues} with an open issue`,
+        `${summary.openIssues} with an open issue; ${summary.requeued} lost event(s) queued again`,
     );
     if (openIssuesTotal > 0) {
       this.logger.warn(
@@ -102,6 +112,35 @@ export class ReconciliationService {
       this.logger.warn(`Payment missing for Checkout Session ${session.id}; repair queued`);
     }
     return summary;
+  }
+
+  /**
+   * Queues again the stored events whose job is gone from Redis (lost data, a flushed database, an
+   * emptied queue). Without this such an event stays `PENDING` for good: the webhook already answered
+   * 200, so Stripe won't send it again, and the session check above only finds missing payments, not
+   * refunds or failures. Only events received over {@link LOST_EVENT_AGE_MS} ago, so one whose job is
+   * being added right now isn't touched. An event whose job still exists, in any state, is left alone.
+   * @param now The time of the run.
+   * @returns How many events were queued again.
+   */
+  private async requeueLostEvents(now: Date): Promise<number> {
+    const pending = await this.prisma.stripeEvent.findMany({
+      where: { status: 'PENDING', receivedAt: { lt: new Date(now.getTime() - LOST_EVENT_AGE_MS) } },
+      select: { id: true },
+      orderBy: { receivedAt: 'asc' },
+      take: MAX_REQUEUED_EVENTS,
+    });
+    let requeued = 0;
+    for (const { id } of pending) {
+      if (await this.queue.getJob(id)) {
+        continue;
+      }
+      // Same name, data and job ID as the webhook's add (WebhooksService.recordEvent).
+      await this.queue.add(STRIPE_EVENT_JOB, { eventId: id }, { jobId: id });
+      this.logger.warn(`Event ${id} was PENDING with no job; queued again`);
+      requeued++;
+    }
+    return requeued;
   }
 
   /** Every completed session created since `createdSince` (Unix seconds), page by page. */
