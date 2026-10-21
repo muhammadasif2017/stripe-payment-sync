@@ -5,4 +5,4 @@
 - [x] CI: `push` on `main` only; `docker` runs alongside `checks`
 - [x] Docs updated
 - [x] PR: one run per commit, both jobs pass, time measured
-- [ ] Human review and merge
+- [x] Human review and merge
