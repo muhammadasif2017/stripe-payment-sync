@@ -24,16 +24,15 @@
 
 A portfolio project by **Muhammad Asif**, built from a fictional client brief for an online course shop.
 
+- **Why it matters:** a shop that misses or duplicates payment records loses money and support time. This keeps every payment and refund correct, even when something fails.
 - **What it is:** a NestJS backend that keeps orders, payments and refunds in PostgreSQL in step with Stripe, using Stripe's webhooks, a retry queue and a daily check against Stripe.
-- **How it was built:** in 10 stages, each planned, tested and merged as one reviewed pull request, then hardened after a security review.
+- **How it was built:** in 10 stages, each planned, tested and merged through reviewed pull requests; the last stage hardened it after a security review.
 - **How it is checked:** 186 unit and 126 end-to-end tests. CI runs them on every pull request, starts the whole stack in Docker and scans the image for known vulnerabilities.
 - **Skills it shows:** payment webhooks, idempotency, background jobs with retries, reconciliation, PostgreSQL constraints, Docker, CI/CD, security hardening.
 
-**The whole flow in 45 seconds**, recorded against the running app and Stripe's test mode: a customer pays, Stripe's webhook marks the order paid, then a refund made in Stripe arrives the same way.
+**The whole flow in under 40 seconds**, recorded against the running app and Stripe's test mode: a customer pays, Stripe's webhook marks the order paid, then a refund made in Stripe arrives the same way.
 
 ![Demo: a course is bought with Stripe's test card, the webhook is processed by the worker, the order becomes PAID in PostgreSQL, then a refund makes it REFUNDED](docs/images/demo.gif)
-
-[Watch it as a video (MP4)](docs/images/demo.mp4)
 
 ---
 
@@ -159,8 +158,8 @@ The queue job carries only the event ID, and its job ID is that same ID, so a du
 | Order status is always right | Computed from **all** payments and refunds, not stepped per event; latest objects fetched from Stripe | Unit tests for every status; e2e: refund before payment, late decline after success, cancel after expiry |
 | The client can't choose the price | Request accepts only `courseId` and `email`; the server sets amount and currency | e2e: a body with `amount` → `400`, no order |
 | Never live mode | Startup refuses keys that aren't `sk_test_…`; live-mode events refused | Unit and e2e tests |
-| Customer data is kept to a minimum | Stored events keep only the IDs the worker reads; email, name and address are never stored, and a migration removed them from older rows | Unit tests of the trimming; e2e: a webhook with customer details is stored without them and still processed |
-| Checkout can't be flooded | `POST /checkout` allows 10 requests per minute per IP; behind a proxy, `TRUST_PROXY` makes the limit see client addresses | e2e: the 11th request gets `429` and Stripe is never called |
+| Customer data is kept to a minimum | Stored Stripe events keep only the IDs the worker reads: the customer's email, name and address from Stripe are not stored in them, and a migration removed them from older rows. An order keeps only the optional email the customer types at checkout | Unit tests of the trimming; e2e: a webhook with customer details is stored without them |
+| Checkout can't be flooded | `POST /checkout` allows 10 requests per minute per IP; behind a proxy, `TRUST_PROXY` makes the limit see client addresses | e2e: the 11th request gets `429` |
 | Pages can't be framed or injected into | helmet's security headers: a Content-Security-Policy allowing scripts only from this site, `frame-ancestors 'none'`, `nosniff`; no `X-Powered-By` | e2e: headers on the page, the API and the dashboard; a real browser loaded the checkout page and the dashboard with no policy errors |
 
 ## How a payment is never recorded twice
@@ -324,8 +323,6 @@ docker compose start postgres                   # the next retry completes the p
 
 Open <http://localhost:3000/admin/queues> and log in with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`. Every job is listed by its Stripe event ID; a failed one shows its error and attempt count.
 
-![Bull Board showing a failed job: the error says the event has no valid order ID, with buttons to retry or delete it](docs/images/dashboard-failed-job.png)
-
 To see a failure and a manual retry, run the worker with a wrong Stripe key. Stripe answers 401, which is retried like any temporary error:
 
 ```bash
@@ -343,6 +340,8 @@ WARN [StripeEventsProcessor] Event evt_1UR5Ei… failed on attempt 5 (giving up)
  LOG [StripeCalls] checkout.sessions.retrieve event=evt_1UR5Ei… status=200 duration=812ms request=req_hUQZ…
  LOG [StripeEventsProcessor] Processed checkout.session.completed event evt_1UR5Ei… (attempt 6)
 ```
+
+![Bull Board showing a job that failed all 5 attempts with "Invalid API Key provided", with buttons to retry or delete it](docs/images/dashboard-failed-job.png)
 
 A manual retry is one extra attempt (attempt 6), not five more. Retrying a job that already completed changes nothing: the worker skips events already `PROCESSED`.
 
@@ -516,7 +515,7 @@ docker-compose.yml PostgreSQL and Redis; with --profile app, also migrate, api a
 
 ## Build history
 
-The project was built in ten stages, each delivered as one reviewed pull request. What was built and checked at each stage is in the [build log](docs/BUILD_LOG.md).
+The project was built in ten stages, each delivered through reviewed pull requests. What was built and checked at each stage is in the [build log](docs/BUILD_LOG.md).
 
 - [x] **1. Project setup**: NestJS, Prisma, Docker Compose, validated configuration, health check
 - [x] **2. Data model**: events, orders, payments, refunds, with database-level guarantees
