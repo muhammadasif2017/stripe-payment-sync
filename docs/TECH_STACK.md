@@ -83,7 +83,7 @@ Sets the standard security headers on every response: a Content-Security-Policy,
 
 ## Docker (multi-stage) and Docker Compose profiles
 
-One image runs as the API or the worker (`WORKER_ENABLED`), so both always run the same code. A multi-stage build compiles with all dependencies and ships only production ones: no TypeScript, no Prisma CLI, no test tools in the running container, which makes it smaller and gives an attacker less to work with. A separate `migrate` target applies migrations once before the app starts. A Compose profile (`app`) keeps `docker compose up -d` meaning "databases for development", while `docker compose --profile app up --build` starts everything.
+One image runs as the API or the worker (`WORKER_ENABLED`), so both always run the same code. A multi-stage build compiles with all dependencies and ships only production ones: no TypeScript, no Prisma CLI, no test tools in the running container, which makes it smaller and gives an attacker less to work with. A separate `migrate` target applies migrations once before the app starts. A Compose profile (`app`) keeps `docker compose up -d` meaning "databases for development", while `docker compose --profile app up --build` starts everything. Redis runs with a password and both database passwords are required (`${VAR:?message}`), so Compose refuses to start without them instead of starting with a known or empty one (stage 10).
 
 ## Claude Code hooks
 

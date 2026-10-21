@@ -10,7 +10,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Required, no default: an empty value stops Compose before anything starts.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - '127.0.0.1:${POSTGRES_PORT:-5435}:5432'
@@ -27,7 +28,19 @@ services:
     restart: unless-stopped
     # Append-only file + named volume: queued and failed BullMQ jobs (stage 4) survive a container
     # restart or recreate. Without them a `docker compose down` would silently drop pending payments.
-    command: ['redis-server', '--appendonly', 'yes']
+    # The password keeps other local processes from adding, changing or deleting queue jobs without
+    # the dashboard's login.
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--requirepass',
+        '${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}',
+      ]
+    environment:
+      # redis-cli reads the password from here, so the healthcheck needs no argument for it.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     ports:
       - '127.0.0.1:${REDIS_PORT:-6380}:6379'
     volumes:
@@ -64,7 +77,7 @@ services:
     environment: &app-environment
       # Service names, not localhost: these override the host URLs in .env.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       PORT: '3000'
       # All interfaces inside the container, so the published port can reach it; the host side
       # stays on 127.0.0.1 (ports below).

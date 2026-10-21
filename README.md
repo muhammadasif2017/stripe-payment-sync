@@ -179,7 +179,7 @@ The brief asks this directly. The answer is four independent layers, each enforc
 git clone https://github.com/muhammadasif2017/stripe-payment-sync.git
 cd stripe-payment-sync
 
-# 2. Configure: copy the example, then fill in three values (see below)
+# 2. Configure: copy the example, then fill in five values (see below)
 cp .env.example .env
 
 # 3. Build and start everything: migrations, then the API and the worker
@@ -190,13 +190,14 @@ curl http://localhost:3000/health
 # {"status":"ok"}
 ```
 
-The three values in `.env`:
+The five values in `.env`:
 
 | Variable | Where it comes from |
 | --- | --- |
 | `STRIPE_SECRET_KEY` | Stripe dashboard, test mode: **Developers → API keys → Secret key** (`sk_test_…`) |
 | `STRIPE_WEBHOOK_SECRET` | `stripe listen --print-secret` (see [step 1 below](#1-forward-stripes-webhooks-to-your-machine)) |
 | `ADMIN_PASSWORD` | Any password of 16+ characters, for the dashboard |
+| `POSTGRES_PASSWORD`, `REDIS_PASSWORD` | Passwords for the database and the queue; Compose refuses to start without them. Letters, digits, `-` and `_` only. Generate each with `node -e "console.log(require('crypto').randomBytes(18).toString('base64url'))"` |
 
 If you change `.env` later, apply it with `docker compose --profile app up -d --force-recreate api worker`.
 
@@ -217,7 +218,8 @@ To run the app on your machine with hot reload, and the databases in Docker.
 # 1. Install (also generates the Prisma client)
 npm install
 
-# 2. Configure: then put your Stripe test key (sk_test_…) and a dashboard password (16+ characters) in .env
+# 2. Configure: then put your Stripe test key (sk_test_…), a dashboard password (16+ characters)
+#    and the PostgreSQL and Redis passwords in .env, also in place of the placeholders in the four URLs
 cp .env.example .env
 
 # 3. Start PostgreSQL (localhost:5435) and Redis (localhost:6380), without the app containers
@@ -236,7 +238,7 @@ curl http://localhost:3000/health
 ```
 
 > [!TIP]
-> The non-default ports (`5435`, `6380`) avoid clashing with other local databases. Change `POSTGRES_PORT` / `REDIS_PORT` and the two URLs in `.env` if they are taken.
+> The non-default ports (`5435`, `6380`) avoid clashing with other local databases. Change `POSTGRES_PORT` / `REDIS_PORT` and the URLs in `.env` if they are taken.
 
 The app **refuses to start** with a missing or invalid setting, and names every problem at once without printing secret values.
 
@@ -434,7 +436,7 @@ All settings come from environment variables (`.env` locally), validated at star
 | `TRUST_PROXY` | `false` | Behind a reverse proxy: the number of proxies (usually `1`), or their IPs or subnets, so rate limits see client addresses. Never `true` (refused), which would let clients pick their own address |
 | `APP_URL` | `http://localhost:3000` | Where Stripe sends the customer back; no trailing slash |
 | `DATABASE_URL` | `postgresql://…:5435/payments` | PostgreSQL |
-| `REDIS_URL` | `redis://localhost:6380` | Redis for the queue |
+| `REDIS_URL` | `redis://:<password>@localhost:6380` | Redis for the queue, with `REDIS_PASSWORD` in it |
 | `STRIPE_SECRET_KEY` | `sk_test_…` | Test-mode secret key; anything else is refused |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_…` | Verifies webhook signatures |
 | `WORKER_ENABLED` | `true` | `false` runs the API only, so API and worker can run as separate processes |
@@ -442,9 +444,9 @@ All settings come from environment variables (`.env` locally), validated at star
 | `ADMIN_PASSWORD` | 16+ characters | Dashboard password; required, no default |
 | `RECONCILIATION_CRON` | `0 3 * * *` | When the daily reconciliation runs, as a 5-field cron pattern in UTC |
 | `APP_PORT` | `3000` | Docker only: host port for the API container |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`, `REDIS_PORT` | see `.env.example` | Docker Compose: database credentials and host ports. In the containers, the database and Redis URLs are built from these and point at the service names |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`, `REDIS_PASSWORD`, `REDIS_PORT` | see `.env.example` | Docker Compose: credentials and host ports. Both passwords are required. In the containers, the database and Redis URLs are built from these and point at the service names |
 | `TEST_DATABASE_URL` | `…/payments_test` | Database for e2e tests; must differ from `DATABASE_URL` |
-| `TEST_REDIS_URL` | `redis://localhost:6380/1` | Redis database for e2e tests; must differ from `REDIS_URL` |
+| `TEST_REDIS_URL` | `redis://:<password>@localhost:6380/1` | Redis database for e2e tests; must differ from `REDIS_URL` |
 
 `.env` is git-ignored; [`.env.example`](.env.example) documents every variable.
 

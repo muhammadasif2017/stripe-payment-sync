@@ -45,10 +45,10 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 ## Task 7: Passwords (L-5)
 
-- [ ] Redis `--requirepass`, required `REDIS_PASSWORD`; healthcheck and container URLs use it
-- [ ] `POSTGRES_PASSWORD` required, empty in `.env.example`
-- [ ] CI docker job sets both
-- [ ] Local `.env` updated without printing values; Redis container recreated, data kept
+- [x] Redis `--requirepass`, required `REDIS_PASSWORD`; healthcheck and container URLs use it
+- [x] `POSTGRES_PASSWORD` required, empty in `.env.example`
+- [x] CI docker job sets both
+- [x] Local `.env` updated without printing values; Redis container recreated, data kept
 
 ## Task 8: Node, digests, Dependabot, scan (M-2)
 

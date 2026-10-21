@@ -367,3 +367,9 @@ Because the worker never trusts it: it reads the event's object ID, fetches the 
 
 **How did you remove the data already stored?**
 A migration rewrites every existing row to the same shape, with the same rules as new events (an expanded payment intent becomes its ID). It can't be undone, so it was tried first inside a transaction on sample rows in the test database and rolled back, and the development database only got it after an explicit yes.
+
+**Redis only listens on 127.0.0.1. Why does it need a password?**
+Because "only this machine" still means every process on it. Without a password, any local program (or a compromised dependency) could add, change or delete queue jobs, skipping the dashboard's login entirely. Now Redis runs with `--requirepass` and Compose refuses to start without `REDIS_PASSWORD`. The PostgreSQL password became required too: `.env.example` used to ship `change-me`, and a copied example quietly kept it.
+
+**How did you add a password without losing the queued jobs?**
+Redis keeps its data in a named volume with the append-only file, so recreating the container with the new setting keeps it. The key counts were checked before and after: the same. The password went into `.env` from a script, never printed. PostgreSQL's password didn't change, because PostgreSQL only reads `POSTGRES_PASSWORD` the first time it creates its data folder.

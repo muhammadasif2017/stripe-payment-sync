@@ -77,6 +77,8 @@ jobs:
         run: |
           cp .env.example .env
           sed -i 's/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=ci-dashboard-password/' .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-postgres-password/' .env
+          sed -i 's/^REDIS_PASSWORD=.*/REDIS_PASSWORD=ci-redis-password/' .env
       - name: Build the image and start the whole stack
         run: docker compose --profile app up --build -d
       - name: Wait for the API to be healthy
