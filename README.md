@@ -2,7 +2,7 @@
 
 # Stripe Payment Sync
 
-**Every Stripe payment, failure and refund lands in your database exactly once, even when Stripe repeats itself, the database goes down, or the customer closes the tab.**
+**Every Stripe payment, failure and refund is recorded in your database once, even when Stripe sends it twice, the database goes down, or the customer closes the tab.**
 
 [![CI](https://github.com/muhammadasif2017/stripe-payment-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/muhammadasif2017/stripe-payment-sync/actions/workflows/ci.yml)
 ![NestJS 12](https://img.shields.io/badge/NestJS-12-E0234E?logo=nestjs&logoColor=white)
@@ -20,8 +20,26 @@
 
 ---
 
+## At a glance
+
+A portfolio project by **Muhammad Asif**, built from a fictional client brief for an online course shop.
+
+- **What it is:** a NestJS backend that keeps orders, payments and refunds in PostgreSQL in step with Stripe, using Stripe's webhooks, a retry queue and a daily check against Stripe.
+- **How it was built:** in 10 stages, each planned, tested and merged as one reviewed pull request, then hardened after a security review.
+- **How it is checked:** 186 unit and 126 end-to-end tests. CI runs them on every pull request, starts the whole stack in Docker and scans the image for known vulnerabilities.
+- **Skills it shows:** payment webhooks, idempotency, background jobs with retries, reconciliation, PostgreSQL constraints, Docker, CI/CD, security hardening.
+
+**The whole flow in 45 seconds**, recorded against the running app and Stripe's test mode: a customer pays, Stripe's webhook marks the order paid, then a refund made in Stripe arrives the same way.
+
+![Demo: a course is bought with Stripe's test card, the webhook is processed by the worker, the order becomes PAID in PostgreSQL, then a refund makes it REFUNDED](docs/images/demo.gif)
+
+[Watch it as a video (MP4)](docs/images/demo.mp4)
+
+---
+
 ## Contents
 
+- [At a glance](#at-a-glance)
 - [The problem](#the-problem)
 - [How it works](#how-it-works)
 - [Why a queue](#why-a-queue)
@@ -37,7 +55,7 @@
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Project structure](#project-structure)
-- [Roadmap](#roadmap)
+- [Build history](#build-history)
 - [Known limits](#known-limits)
 - [Further reading](#further-reading)
 - [About this project](#about-this-project)
@@ -141,6 +159,8 @@ The queue job carries only the event ID, and its job ID is that same ID, so a du
 | Order status is always right | Computed from **all** payments and refunds, not stepped per event; latest objects fetched from Stripe | Unit tests for every status; e2e: refund before payment, late decline after success, cancel after expiry |
 | The client can't choose the price | Request accepts only `courseId` and `email`; the server sets amount and currency | e2e: a body with `amount` → `400`, no order |
 | Never live mode | Startup refuses keys that aren't `sk_test_…`; live-mode events refused | Unit and e2e tests |
+| Customer data is kept to a minimum | Stored events keep only the IDs the worker reads; email, name and address are never stored, and a migration removed them from older rows | Unit tests of the trimming; e2e: a webhook with customer details is stored without them and still processed |
+| Checkout can't be flooded | `POST /checkout` allows 10 requests per minute per IP; behind a proxy, `TRUST_PROXY` makes the limit see client addresses | e2e: the 11th request gets `429` and Stripe is never called |
 | Pages can't be framed or injected into | helmet's security headers: a Content-Security-Policy allowing scripts only from this site, `frame-ancestors 'none'`, `nosniff`; no `X-Powered-By` | e2e: headers on the page, the API and the dashboard; a real browser loaded the checkout page and the dashboard with no policy errors |
 
 ## How a payment is never recorded twice
@@ -268,6 +288,8 @@ stripe listen --all-snapshot --latest --forward-to localhost:3000/webhooks/strip
 
 ### 2. Buy a course
 
+![The shop's checkout page, listing two courses with Buy buttons](docs/images/checkout-page.png)
+
 Open <http://localhost:3000>, click **Buy**, and pay with card **4242 4242 4242 4242**, any future date, any CVC. Within a second or two:
 
 ```bash
@@ -301,6 +323,8 @@ docker compose start postgres                   # the next retry completes the p
 ### 5. Watch it in the dashboard
 
 Open <http://localhost:3000/admin/queues> and log in with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`. Every job is listed by its Stripe event ID; a failed one shows its error and attempt count.
+
+![Bull Board showing a failed job: the error says the event has no valid order ID, with buttons to retry or delete it](docs/images/dashboard-failed-job.png)
 
 To see a failure and a manual retry, run the worker with a wrong Stripe key. Stripe answers 401, which is retried like any temporary error:
 
@@ -490,9 +514,9 @@ docker-compose.yml PostgreSQL and Redis; with --profile app, also migrate, api a
 .github/workflows/ CI
 ```
 
-## Roadmap
+## Build history
 
-The project is built in eight stages, each delivered as one reviewed pull request.
+The project was built in ten stages, each delivered as one reviewed pull request. What was built and checked at each stage is in the [build log](docs/BUILD_LOG.md).
 
 - [x] **1. Project setup**: NestJS, Prisma, Docker Compose, validated configuration, health check
 - [x] **2. Data model**: events, orders, payments, refunds, with database-level guarantees
@@ -501,9 +525,9 @@ The project is built in eight stages, each delivered as one reviewed pull reques
 - [x] **5. Worker with retries**: latest-object processing, one transaction, 5 attempts with backoff
 - [x] **6. Logging and dashboard**: every Stripe call logged; Bull Board behind a login to inspect and retry failed jobs
 - [x] **7. Daily reconciliation**: compare the last two days of Stripe checkouts with the database and repair anything missed
-- [x] **8. CI and Docker**: GitHub Actions on every push; `docker compose --profile app up` starts migrations, API, worker, PostgreSQL and Redis
-
-After the eight: race fixes (stage 9) and hardening from a security review (stage 10: rate-limited checkout, security headers, passwords for Redis and PostgreSQL, trimmed event payloads, Node 24 and an image scan).
+- [x] **8. CI and Docker**: GitHub Actions CI; `docker compose --profile app up` starts migrations, API, worker, PostgreSQL and Redis
+- [x] **9. Race fixes**: the worker and reconciliation can no longer overwrite each other's newer data
+- [x] **10. Hardening**: from a security review: rate-limited checkout, security headers, passwords for Redis and PostgreSQL, customer data no longer stored, Node 24, images pinned by digest, Dependabot and an image scan
 
 ## Known limits
 
@@ -525,7 +549,7 @@ Honest edges of the current version, each with its planned answer:
 | --- | --- |
 | [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md) | What was built at each stage, why each change was made, problems hit and how they were verified |
 | [`docs/TECH_STACK.md`](docs/TECH_STACK.md) | Why each technology was chosen |
-| [`docs/INTERVIEW_PREP.md`](docs/INTERVIEW_PREP.md) | The questions a client or interviewer asks about this design, answered |
+| [Design questions and answers](docs/INTERVIEW_PREP.md) | The questions a client or reviewer asks about this design, answered |
 | [`PROJECT.md`](PROJECT.md) | The original brief, acceptance criteria and build plan |
 
 ## About this project
