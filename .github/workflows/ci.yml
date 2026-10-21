@@ -1,10 +1,13 @@
-# Every push and pull request: the five checks against real PostgreSQL and Redis, a production
-# dependency audit, then the Docker image and the whole stack started from it.
+# Every pull request and every push to main: the five checks against real PostgreSQL and Redis, a
+# production dependency audit, and, in parallel, the Docker image and the whole stack started from it.
 # Needs no secrets: the tests use dummy Stripe values and never call Stripe.
 name: CI
 
 on:
+  # Only main: a branch with a pull request is tested by the pull_request run; testing its pushes too
+  # ran every commit twice.
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -68,8 +71,8 @@ jobs:
       # optional Prisma CLI don't ship, so their findings don't fail the build.
       - run: npm audit --omit=dev --omit=optional --audit-level=high
 
+  # Runs alongside checks rather than after it: a run takes as long as the slower job, not both.
   docker:
-    needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

@@ -390,3 +390,9 @@ No, it was Dependabot doing its job: CI caught both before anything was merged. 
 
 **Why not just add `--legacy-peer-deps` to make the Vitest update install?**
 Because the peer dependency is telling the truth: the coverage plugin is built for one exact Vitest version. Forcing the install would hide a real mismatch and could break coverage in ways no test would show.
+
+**Why did CI run twice for every commit, and how did you fix it?**
+The workflow ran on `push` and on `pull_request`. A commit on a branch with an open PR triggers both, and they test the same code. The concurrency group didn't collapse them, because one run's ref is the branch and the other's is the PR's merge ref. Now `push` runs only on `main`. Pull requests are still tested on every commit, and `main` is tested after each merge.
+
+**Why run the Docker job in parallel with the tests instead of after them?**
+After them, a run took as long as both jobs added up; in parallel, as long as the slower one. The trade-off is wasted runner time when the tests fail, because the image is built anyway. For a project this size, faster feedback is worth more than a minute and a half of free runner time.
