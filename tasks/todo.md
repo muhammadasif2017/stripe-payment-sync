@@ -40,7 +40,7 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 - [x] Only `id`, `type`, `created`, `livemode`, `api_version` and `data.object` `{id, object, payment_intent}` stored
 - [x] Expanded `payment_intent` stored as its ID
-- [ ] Existing rows trimmed by a migration (decision 2); user confirms before it runs on `payments`
+- [x] Existing rows trimmed by a migration (decision 2); run on `payments` with the user's approval
 - [x] Unit test of trimming; e2e webhook with customer details stored without them and still processed
 
 ## Task 7: Passwords (L-5)
