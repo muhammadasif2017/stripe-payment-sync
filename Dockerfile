@@ -34,7 +34,8 @@ COPY package.json package-lock.json ./
 # packages are BullMQ's native msgpack speed-up, which falls back to plain JavaScript.
 # npm itself goes afterwards: the app never runs it, and the copy bundled with Node is where the image
 # scan finds vulnerabilities (stage 10).
-RUN npm ci --omit=dev --omit=optional --ignore-scripts && npm cache clean --force   && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+RUN npm ci --omit=dev --omit=optional --ignore-scripts && npm cache clean --force \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=build /app/dist ./dist
 # Served by the app as the checkout pages (src/app.setup.ts resolves ../public from dist/).
 COPY public ./public

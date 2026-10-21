@@ -59,8 +59,8 @@ Every task: a test that fails without the change, the five checks, the three doc
 
 ## Task 9: Checkpoint
 
-- [ ] Five checks pass
-- [ ] Stack started as a separate Compose project; `/health`, `/`, dashboard login, clean stop
-- [ ] Docs complete
-- [ ] Branch review, then PR
+- [x] Five checks pass
+- [x] Stack started as a separate Compose project; `/health`, `/`, dashboard login, clean stop
+- [x] Docs complete
+- [x] Branch review, then PR
 - [ ] Human review and merge

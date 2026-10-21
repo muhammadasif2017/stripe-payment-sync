@@ -453,8 +453,8 @@ All settings come from environment variables (`.env` locally), validated at star
 ## Testing
 
 ```bash
-npm test            # 156 unit tests
-npm run test:e2e    # 97 end-to-end tests (needs `docker compose up -d`)
+npm test            # 186 unit tests
+npm run test:e2e    # 126 end-to-end tests (needs `docker compose up -d`)
 npm run lint
 npm run typecheck
 npm run build
@@ -462,7 +462,7 @@ npm run build
 
 - **Real infrastructure, isolated.** e2e tests run against their own PostgreSQL database (`payments_test`, created and migrated automatically) and their own Redis database. They refuse to start if pointed at the development database or a remote server.
 - **No network, no secrets.** Stripe is replaced by a fake client and webhook payloads are signed locally, so the suite runs offline and in CI.
-- **CI on every push and pull request** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the five checks against PostgreSQL and Redis services, an audit of the production dependencies, then the Docker image built and the whole stack started and checked.
+- **CI on every push and pull request** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): the five checks against PostgreSQL and Redis services, an audit of the production dependencies, then the Docker image built, the whole stack started and checked, and the runtime image scanned with Trivy (fails on fixable HIGH or CRITICAL findings). Images are pinned by digest; Dependabot proposes updates weekly.
 - **The key tests are proven to catch their bug.** Each was checked by breaking the code on purpose (dropping the job ID, skipping signature checks, an off-by-one in the retry count…) and watching it fail. The full list is in the [build log](docs/BUILD_LOG.md).
 - **Verified against real Stripe** at every stage since checkout: test payments with card 4242, `stripe trigger`, event redelivery, refunds, a live database outage, a failed job retried from the dashboard, and a deleted payment restored by reconciliation.
 
@@ -502,6 +502,8 @@ The project is built in eight stages, each delivered as one reviewed pull reques
 - [x] **6. Logging and dashboard**: every Stripe call logged; Bull Board behind a login to inspect and retry failed jobs
 - [x] **7. Daily reconciliation**: compare the last two days of Stripe checkouts with the database and repair anything missed
 - [x] **8. CI and Docker**: GitHub Actions on every push; `docker compose --profile app up` starts migrations, API, worker, PostgreSQL and Redis
+
+After the eight: race fixes (stage 9) and hardening from a security review (stage 10: rate-limited checkout, security headers, passwords for Redis and PostgreSQL, trimmed event payloads, Node 24 and an image scan).
 
 ## Known limits
 
