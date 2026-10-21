@@ -538,3 +538,16 @@ The stage 9 security audit's remaining findings (two medium, six low) and the tw
   - Baseline scan: the first Node 24 runtime image had 3 fixable HIGH findings, all inside the npm bundled with Node (`brace-expansion` 5.0.9 twice, `undici` 6.28.0), none in the app's dependencies or Alpine. After deleting npm from the runtime stage: 0. The scan also fails when it should: the unchanged `node:24.22.0-alpine` image exits 1.
   - Checks: npm ci, lint, typecheck, unit (186), build and e2e (126) passed in a `node:24.22.0-alpine` container against the local databases. The whole stack, started as `sps-check`, answered `/health`, `/` and the dashboard login on Node v24.22.0 with the pinned images; Trivy on that image exited 0.
 - **Task 9: Checkpoint.** Lint, typecheck, build, 186 unit and 126 e2e tests pass. The whole stack, started as a separate Compose project (`sps-check`): `/health` ok, `/` 200, dashboard 401 without login and 200 with it, Node v24.22.0 with no npm in the runtime image, Trivy 0 fixable HIGH/CRITICAL findings, and `docker compose stop` finished in 2 s with every container exiting on its own. Branch review of the full diff: the Dockerfile's `RUN` line had lost its line break in an edit (still built, hard to read), fixed. README updated: test counts, the CI scan and Dependabot, and a line on stages 9 and 10.
+
+## Stage 10 follow-up: Dependabot rules and faster CI (2026-10-21)
+
+Dependabot's first run opened 6 PRs. Four passed CI. Two failed for reasons outside this project's code, and CI was slower than it needed to be. Plan: `tasks/plan.md`.
+
+- **Task 1: Dependabot rules.**
+  - PR #22, TypeScript 6 → 7: lint, typecheck and unit tests passed, then `nest build` stopped with "The installed TypeScript version (7.0.2) does not expose the programmatic compiler API that the Nest CLI requires … expected to return in 7.1". `typescript` majors are now ignored, with a comment saying when to remove the rule.
+  - PR #23, Vitest 4 → 5: `npm ci` failed with `ERESOLVE`: `@vitest/coverage-v8` 4.1.11 requires exactly `vitest` 4.1.11, and Dependabot had updated `vitest` alone. `vitest` and `@vitest/*` are now one group, like Prisma, and their majors are ignored until a planned upgrade (the user's decision).
+  - Both PRs closed with the reason.
+- **Task 2: Faster CI.** A PR run took about 2 min 45 s: `checks` (76 s: e2e 24 s, service containers 15 s, `npm ci` 13 s) and then `docker` (82 s: image build 58 s with no layer cache, Trivy 11 s), one after the other. Every commit on a PR branch also ran twice, for `push` and for `pull_request`; the concurrency group couldn't merge them because their refs differ (`refs/heads/…` and `refs/pull/N/merge`).
+  - `.github/workflows/ci.yml`: `push` runs only on `main`; pull requests still run on every commit. `docker` no longer has `needs: checks`, so both jobs start together. Cost: when `checks` fails, `docker` still uses its minute and a half of runner time.
+  - README and `CLAUDE.md` say when CI runs.
+  - Proof, from this follow-up's PR (#26): the push created a single `pull_request` run and no `push` run. Both jobs started at 16:22:38 and passed; the run took 1 min 23 s (16:22:35 to 16:23:58), down from about 2 min 45 s.

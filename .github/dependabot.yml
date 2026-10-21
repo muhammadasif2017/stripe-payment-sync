@@ -11,6 +11,11 @@ updates:
         patterns:
           - prisma
           - '@prisma/*'
+      # @vitest/coverage-v8 requires exactly the same vitest version; updated alone, npm ci fails.
+      vitest:
+        patterns:
+          - vitest
+          - '@vitest/*'
     ignore:
       # npm's `latest` for Prisma is an 8.x release candidate; a major upgrade is planned by hand.
       - dependency-name: prisma
@@ -19,6 +24,15 @@ updates:
         update-types: ['version-update:semver-major']
       # Follows the Node major in the Dockerfile and CI.
       - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # TypeScript 7.0 has no programmatic compiler API, which `nest build` needs (PR #22 failed);
+      # the Nest CLI expects it back in 7.1. Remove this once Nest supports TypeScript 7.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+      # Vitest 5 is a planned upgrade, not a weekly bump (PR #23).
+      - dependency-name: vitest
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@vitest/*'
         update-types: ['version-update:semver-major']
 
   - package-ecosystem: docker

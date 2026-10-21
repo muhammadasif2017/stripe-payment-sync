@@ -382,3 +382,17 @@ Three high findings, all in the copy of npm that comes with the Node image, none
 
 **Why is the Trivy action pinned to a commit hash?**
 A version tag on a GitHub Action can be moved to point at different code, and a CI step runs with the repository's checkout. A commit hash can't be changed, and Dependabot still proposes updates to it. The pinned version also matters: GitHub advisory GHSA-9p44-j4g5-cfx5 (February 2026) is a script injection in trivy-action 0.31.0 to 0.34.0; the pinned v0.36.0 is past the fix. And the action pins its own steps (`setup-trivy`, `actions/cache`) to commits too, so the pin covers all the code it runs.
+
+## Stage 10 follow-up: Dependabot rules and faster CI
+
+**Two Dependabot PRs failed on day one. Was that a problem with Dependabot?**
+No, it was Dependabot doing its job: CI caught both before anything was merged. The TypeScript 7 update broke `nest build`, because TypeScript 7.0 ships only the `tsc` program and the Nest CLI compiles through TypeScript's programmatic API, due back in 7.1. The Vitest 5 update broke `npm ci`, because the coverage plugin requires exactly the same Vitest version and Dependabot updated Vitest alone. The fixes are configuration: ignore TypeScript majors until Nest supports 7, and group Vitest's packages so they move together, the same rule Prisma already had.
+
+**Why not just add `--legacy-peer-deps` to make the Vitest update install?**
+Because the peer dependency is telling the truth: the coverage plugin is built for one exact Vitest version. Forcing the install would hide a real mismatch and could break coverage in ways no test would show.
+
+**Why did CI run twice for every commit, and how did you fix it?**
+The workflow ran on `push` and on `pull_request`. A commit on a branch with an open PR triggers both, and they test the same code. The concurrency group didn't collapse them, because one run's ref is the branch and the other's is the PR's merge ref. Now `push` runs only on `main`. Pull requests are still tested on every commit, and `main` is tested after each merge.
+
+**Why run the Docker job in parallel with the tests instead of after them?**
+After them, a run took as long as both jobs added up; in parallel, as long as the slower one. The trade-off is wasted runner time when the tests fail, because the image is built anyway. For a project this size, faster feedback is worth more than a minute and a half of free runner time.
