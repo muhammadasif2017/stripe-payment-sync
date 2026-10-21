@@ -63,4 +63,4 @@ Every task: a test that fails without the change, the five checks, the three doc
 - [x] Stack started as a separate Compose project; `/health`, `/`, dashboard login, clean stop
 - [x] Docs complete
 - [x] Branch review, then PR
-- [ ] Human review and merge
+- [x] Human review and merge
