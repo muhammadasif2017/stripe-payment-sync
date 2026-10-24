@@ -396,3 +396,14 @@ The workflow ran on `push` and on `pull_request`. A commit on a branch with an o
 
 **Why run the Docker job in parallel with the tests instead of after them?**
 After them, a run took as long as both jobs added up; in parallel, as long as the slower one. The trade-off is wasted runner time when the tests fail, because the image is built anyway. For a project this size, faster feedback is worth more than a minute and a half of free runner time.
+
+## Two new advisories after the Dependabot merges
+
+**CI went red right after you merged five green Dependabot PRs. Did the merges break it?**
+No. Two high-severity advisories, in `body-parser` and `multer`, came out after the last green run, and the audit step checks against today's advisory database. Running `npm audit` on the lockfile from before the merges shows the same findings. That is the point of auditing on every run: the code didn't change, but what is known about it did.
+
+**Why an npm `overrides` entry instead of updating NestJS?**
+Because no NestJS release had the fix. `@nestjs/platform-express` 12.2.0, the newest, pins `multer` to exactly 2.4.0, the vulnerable version. An override replaces that one transitive version across the tree. `npm audit fix --force` suggested downgrading `@nestjs/platform-express` a whole major version, which trades a known fix for unknown breakage. The override is temporary and the build log says when to remove it.
+
+**The app has no file uploads. Why fix `multer` at all?**
+It ships in the runtime image and CI fails on it, and "we don't call that code" is a claim someone has to keep checking forever. A patch-level override costs less than writing and maintaining an exception, and all five checks pass with it.

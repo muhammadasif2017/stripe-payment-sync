@@ -569,3 +569,18 @@ A review of the README as a hiring manager or recruiter would read it: strong fo
   - The dashboard screenshot showed an old failure with an error class the code no longer throws. It was retaken from the wrong-key run the README describes: "Invalid API Key provided" after 5 attempts, then retried with the right key and processed on attempt 6. The old failed job was removed from the local queue first, so the demo's dashboard shows no failed jobs.
   - The GIF was re-recorded with the Stripe and dashboard loading screens cut out (38 s, 1.9 MB), and amounts labelled in dollars.
   - The MP4 was dropped: GitHub's file view offers only "View raw" for it, not a player.
+
+## Two new advisories: `multer` override and `body-parser` 2.4.0 (2026-10-24)
+
+Merging five Dependabot patch PRs (#32 to #36) left CI red on `main` and on #35. The `npm audit` step and the Trivy image scan both failed on two high-severity advisories published after the last green run:
+
+- `body-parser` 2.3.0, through `express` 5: [GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828), denial of service via trailing bytes after a compressed request body. Fixed in 2.4.0.
+- `multer` 2.4.0, through `@nestjs/platform-express`: [GHSA-q7qp-rjg7-q26m](https://github.com/advisories/GHSA-q7qp-rjg7-q26m), denial of service via a pending asynchronous `fileFilter` after request teardown. Fixed in 2.5.0.
+
+The merges did not cause it: `npm audit` against the lockfile from before them (`77d79f8`) shows the same 4 high findings.
+
+- `body-parser` 2.4.0 fits `express`'s `^2.3.0` range, so a lockfile refresh was enough (`qs` moved from 6.16.0 to 6.16.1 with it).
+- `multer` needs an npm `overrides` entry (`"multer": "^2.5.0"`): even the newest `@nestjs/platform-express`, 12.2.0, pins `multer` to exactly `2.4.0`, so no Nest update would bring the fix. `npm audit fix --force` proposed going back to `@nestjs/platform-express` 11.1.1, a major downgrade; not taken.
+- The app never handles file uploads, so `multer` is loaded but unused. `body-parser` parses every JSON request, including the webhook.
+- Proof: `npm audit --omit=dev --omit=optional --audit-level=high` reports 0 vulnerabilities; unit (186), e2e (126), lint, typecheck and build pass.
+- Remove the override once `@nestjs/platform-express` depends on `multer` 2.5.0 or later.
