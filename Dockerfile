@@ -3,7 +3,7 @@
 # the same image is used on every machine until Dependabot proposes a new one.
 
 # --- build: all dependencies, Prisma client generation, TypeScript compile ---
-FROM node:24.22.0-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS build
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Prisma's postinstall needs the schema to generate the client.
@@ -22,7 +22,7 @@ USER node
 CMD ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
 
 # --- runtime: production dependencies and compiled code only ---
-FROM node:24.22.0-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS runtime
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
